@@ -1,0 +1,436 @@
+"""
+tools.py — WooCommerce AI Agent tools (v2)
+
+Architecture:
+  - search_code()          → Hybrid search on project code (snippets, functions.php, theme files)
+  - search_docs()          → Hybrid search on documentation (company + project docs)
+  - search_by_hook()       → Direct hook lookup via GIN index
+  - get_shop_config()      → Structured project context (plugins, shipping, payments, tax)
+  - _rerank()              → Cohere reranker for top-K refinement
+
+Search pipeline:
+  1. Hybrid search (vector + weighted FTS + RRF) → 30 candidates
+  2. Rerank (Cohere cross-encoder) → top 5
+  3. Parent expansion (SQL-side) → full context
+"""
+
+import json
+import time
+import threading
+import httpx
+from openai import OpenAI
+
+import config
+
+_http = httpx.Client(timeout=30)
+
+_HEADERS = {
+    "apikey": config.SUPABASE_KEY,
+    "Authorization": f"Bearer {config.SUPABASE_KEY}",
+    "Content-Type": "application/json",
+}
+
+_openai = OpenAI(api_key=config.OPENAI_API_KEY)
+
+# Optional reranker
+_cohere_client = None
+if config.COHERE_API_KEY:
+    try:
+        import cohere
+        _cohere_client = cohere.Client(api_key=config.COHERE_API_KEY)
+    except ImportError:
+        pass
+
+
+# -- TTL Cache for get_shop_config() ----------------------------------
+
+_ctx_cache: dict[str, tuple[dict, float]] = {}
+_ctx_lock = threading.Lock()
+_CTX_TTL = 300.0
+
+
+# -- Supabase helpers -------------------------------------------------
+
+def _rpc(function_name: str, payload: dict) -> dict | list:
+    url = f"{config.SUPABASE_URL}/rest/v1/rpc/{function_name}"
+    try:
+        r = _http.post(url, headers=_HEADERS, json=payload)
+        r.raise_for_status()
+        return r.json()
+    except httpx.HTTPStatusError as e:
+        return {"error": f"Supabase {e.response.status_code}: {e.response.text}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _embed_query(query: str) -> list[float]:
+    """Embed a search query."""
+    response = _openai.embeddings.create(
+        model=config.EMBEDDING_MODEL,
+        input=query,
+        dimensions=1536,
+    )
+    return response.data[0].embedding
+
+
+# -- Reranker ---------------------------------------------------------
+
+def _rerank(query: str, documents: list[dict], top_n: int = 5) -> list[dict]:
+    """Rerank documents using Cohere cross-encoder.
+
+    Falls back to original order if Cohere unavailable.
+    """
+    if not _cohere_client or not documents:
+        return documents[:top_n]
+
+    try:
+        texts = [
+            f"{d.get('title', '')}\n{d.get('body', '')}"
+            for d in documents
+        ]
+        result = _cohere_client.rerank(
+            query=query,
+            documents=texts,
+            top_n=min(top_n, len(documents)),
+            model="rerank-v3.5",
+        )
+        return [documents[r.index] for r in result.results]
+    except Exception:
+        return documents[:top_n]
+
+
+# -- Tool: search_code ------------------------------------------------
+
+def search_code(query: str, category: str = "") -> str:
+    """Search project code: snippets, functions.php, theme files.
+
+    Uses hybrid search (vector + weighted FTS + RRF) → rerank → top 5.
+    Optional category filter narrows results.
+    """
+    try:
+        embedding = _embed_query(query)
+    except Exception as e:
+        return f"ERROR generating embedding: {e}"
+
+    payload: dict = {
+        "query_text": query,
+        "query_embedding": embedding,
+        "match_count": 30,
+        "p_project_id": config.get_project_id(),
+        "p_expand_parent": True,
+    }
+    if category:
+        payload["p_category"] = category
+
+    result = _rpc("hybrid_search", payload)
+    if isinstance(result, dict) and "error" in result:
+        return f"ERROR: {result['error']}"
+    if not result:
+        return "No code results found."
+
+    # Rerank
+    reranked = _rerank(query, result, top_n=5)
+
+    # Format
+    return _format_results(reranked)
+
+
+# -- Tool: search_docs ------------------------------------------------
+
+def search_docs(query: str, category: str = "") -> str:
+    """Search documentation: company guides + project-specific docs.
+
+    Searches global docs + current project docs combined.
+    """
+    try:
+        embedding = _embed_query(query)
+    except Exception as e:
+        return f"ERROR generating embedding: {e}"
+
+    payload: dict = {
+        "query_text": query,
+        "query_embedding": embedding,
+        "match_count": 30,
+        "p_project_id": config.get_project_id(),
+        "p_expand_parent": True,
+    }
+    if category:
+        payload["p_category"] = category
+
+    result = _rpc("hybrid_search", payload)
+    if isinstance(result, dict) and "error" in result:
+        return f"ERROR: {result['error']}"
+    if not result:
+        return "No documentation found."
+
+    # Rerank
+    reranked = _rerank(query, result, top_n=5)
+
+    return _format_results(reranked)
+
+
+# -- Tool: search_by_hook ---------------------------------------------
+
+def search_by_hook(hook_name: str) -> str:
+    """Find all code that uses a specific WordPress/WooCommerce hook.
+
+    Direct lookup via GIN index — fast and precise.
+    """
+    result = _rpc("search_by_hook", {
+        "p_hook_name": hook_name,
+        "p_project_id": config.get_project_id(),
+        "match_count": 10,
+    })
+    if isinstance(result, dict) and "error" in result:
+        return f"ERROR: {result['error']}"
+    if not result:
+        return f"No code found using hook '{hook_name}'."
+
+    parts = []
+    for i, doc in enumerate(result, 1):
+        hooks = doc.get("hooks") or []
+        active = doc.get("is_active")
+        flag = " [ACTIVE]" if active else " [INACTIVE]" if active is False else ""
+        text = doc.get("body") or doc.get("text") or ""
+        parts.append(
+            f"[{i}] {doc.get('title', 'Untitled')}{flag}\n"
+            f"Hooks: {', '.join(hooks)}\n{text}"
+        )
+
+    return "\n\n" + ("\n" + "=" * 60 + "\n\n").join(parts)
+
+
+# -- Tool: get_shop_config -------------------------------------------
+
+def get_shop_config() -> str:
+    """Get structured shop configuration: plugins, shipping, payments, tax, versions.
+
+    Returns all structured data for the current project in one call.
+    Cached for 5 minutes to avoid redundant requests.
+    """
+    now = time.monotonic()
+    project_id = config.get_project_id()
+
+    with _ctx_lock:
+        if project_id in _ctx_cache:
+            data, ts = _ctx_cache[project_id]
+            if now - ts < _CTX_TTL:
+                return _format_config(data)
+
+    result = _rpc("get_project_context", {"p_project_id": project_id})
+    if isinstance(result, dict) and "error" in result:
+        return f"ERROR: {result['error']}"
+
+    data = result[0] if isinstance(result, list) else result
+
+    with _ctx_lock:
+        _ctx_cache[project_id] = (data, now)
+
+    return _format_config(data)
+
+
+def _format_config(data: dict) -> str:
+    """Format project context as readable text."""
+    project = data.get("project") or {}
+    parts = [
+        f"=== Store Info ===",
+        f"Site: {project.get('site_url')}",
+        f"WP: {project.get('wp_version')} | WC: {project.get('wc_version')} | PHP: {project.get('php_version')}",
+        f"Theme: {project.get('theme_name')} (child: {project.get('is_child_theme')})",
+        f"Active plugins: {project.get('active_plugins_count')}",
+        f"Last sync: {project.get('last_sync')}",
+    ]
+
+    if not project:
+        parts.append("\nNo shop data synced yet. Run a sync from the WP plugin first.")
+        return "\n".join(parts)
+
+    # Payment gateways (enabled only)
+    gateways = [g for g in (data.get("payment_gateways") or []) if g.get("enabled")]
+    if gateways:
+        parts.append("\n=== Payment Gateways (enabled) ===")
+        for g in gateways:
+            parts.append(f"- {g.get('title')} ({g.get('gateway_id')})")
+
+    # Shipping methods (enabled only)
+    methods = [m for m in (data.get("shipping_methods") or []) if m.get("enabled")]
+    if methods:
+        parts.append("\n=== Shipping Methods (enabled) ===")
+        for m in methods:
+            cost_str = f" — cost: {m.get('cost')}" if m.get("cost") else ""
+            req_str = f" — requires: {m.get('requires')} min {m.get('min_amount')}" if m.get("requires") else ""
+            parts.append(f"- [{m.get('zone_name')}] {m.get('method_title')}{cost_str}{req_str}")
+
+    # Tax
+    tax = data.get("tax_settings") or {}
+    if tax:
+        parts.append(f"\n=== Tax ===")
+        parts.append(f"Enabled: {tax.get('tax_enabled')} | Prices include tax: {tax.get('prices_include_tax')}")
+        rates = tax.get("tax_rates")
+        if isinstance(rates, str):
+            rates = json.loads(rates)
+        if rates:
+            for r in rates[:5]:
+                parts.append(f"- Rate: {r.get('rate', '')}% ({r.get('name', '')})")
+
+    # Active plugins
+    plugins = data.get("active_plugins") or []
+    if plugins:
+        parts.append(f"\n=== Active Plugins ({len(plugins)}) ===")
+        for p in plugins:
+            parts.append(f"- {p.get('plugin_name')} v{p.get('version')}")
+
+    return "\n".join(parts)
+
+
+# -- Formatting -------------------------------------------------------
+
+def _format_results(results: list[dict]) -> str:
+    """Format hybrid search results for the LLM."""
+    parts = []
+    for i, doc in enumerate(results, 1):
+        active = doc.get("is_active")
+        flag = " [ACTIVE]" if active else " [INACTIVE]" if active is False else ""
+        scope = doc.get("scope", "")
+        scope_tag = f" [{scope.upper()}]" if scope == "global" else ""
+        category = doc.get("category", "")
+        cat_tag = f" [{category}]" if category and category != "general" else ""
+        hooks = doc.get("hooks") or []
+        hooks_str = f"\nHooks: {', '.join(hooks)}" if hooks else ""
+        section = doc.get("section_path", "")
+        section_str = f"\nSection: {section}" if section else ""
+        score = doc.get("score", 0)
+        text = doc.get("body") or doc.get("text") or ""
+
+        parts.append(
+            f"[{i}] {doc.get('title', 'Untitled')}{flag}{scope_tag}{cat_tag}"
+            f"  (score={score:.4f}){hooks_str}{section_str}\n{text}"
+        )
+
+    return "\n\n" + ("\n" + "=" * 60 + "\n\n").join(parts)
+
+
+# -- OpenAI tool schemas ----------------------------------------------
+
+TOOL_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_code",
+            "description": (
+                "Search project code: snippets, functions.php, theme files, and custom code "
+                "using hybrid vector + keyword search with AI reranking. "
+                "Use for: finding custom code, hooks, filters, understanding why something "
+                "behaves a certain way, finding specific function names or implementations."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Natural language or technical search query",
+                    },
+                    "category": {
+                        "type": "string",
+                        "enum": [
+                            "shipping", "payments", "checkout", "cart", "tax",
+                            "products", "orders", "emails", "theme", "security",
+                            "performance", "general",
+                        ],
+                        "description": "Optional: filter by WooCommerce area for more precise results",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_docs",
+            "description": (
+                "Search documentation: company technical guides, how-to articles, "
+                "WooCommerce best practices, and project-specific notes. "
+                "Use for: finding how to implement something, troubleshooting guides, "
+                "best practices, agency knowledge base."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Natural language search query about documentation",
+                    },
+                    "category": {
+                        "type": "string",
+                        "enum": [
+                            "shipping", "payments", "checkout", "cart", "tax",
+                            "products", "orders", "emails", "theme", "security",
+                            "performance", "general",
+                        ],
+                        "description": "Optional: filter by topic area",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_by_hook",
+            "description": (
+                "Find all code that uses a specific WordPress/WooCommerce hook or filter. "
+                "Direct lookup — fast and precise. "
+                "Use when you know the exact hook name (e.g. 'woocommerce_package_rates', "
+                "'woocommerce_checkout_fields', 'wp_enqueue_scripts')."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "hook_name": {
+                        "type": "string",
+                        "description": "Exact WordPress/WooCommerce hook or filter name",
+                    },
+                },
+                "required": ["hook_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_shop_config",
+            "description": (
+                "Get complete structured shop configuration in one call: "
+                "WordPress/WooCommerce/PHP versions, active theme, "
+                "payment gateways, shipping zones & methods, tax settings, "
+                "all active plugins with versions. "
+                "Use FIRST for: version checks, config questions, plugin lists, "
+                "shipping/payment setup, tax configuration, general store status."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+]
+
+
+# -- Dispatch ---------------------------------------------------------
+
+_TOOL_MAP = {
+    "search_code": search_code,
+    "search_docs": search_docs,
+    "search_by_hook": search_by_hook,
+    "get_shop_config": get_shop_config,
+}
+
+
+def call_tool(name: str, arguments: dict) -> str:
+    fn = _TOOL_MAP.get(name)
+    if fn is None:
+        return f"ERROR: Unknown tool '{name}'"
+    return fn(**arguments)
