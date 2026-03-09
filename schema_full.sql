@@ -287,7 +287,6 @@ CREATE OR REPLACE FUNCTION hybrid_search(
   match_count     int,
   p_project_id    text,
   p_category      text DEFAULT NULL,
-  p_expand_parent boolean DEFAULT true,
   rrf_k           int DEFAULT 50,
   p_doc_types     text[] DEFAULT NULL
 )
@@ -358,27 +357,38 @@ AS $$
     JOIN documents d ON d.id = COALESCE(v.id, f.id)
   ),
 
-  -- Top results (deduplicated)
+  -- Top results with parent deduplication:
+  -- If multiple children share the same parent, keep only the best scorer
+  -- This prevents flooding the agent with repeated parent context
   top_results AS (
     SELECT doc_id, rrf_score
-    FROM combined
+    FROM (
+      SELECT
+        doc_id,
+        rrf_score,
+        ROW_NUMBER() OVER (
+          PARTITION BY COALESCE(d.parent_id, d.id)
+          ORDER BY rrf_score DESC
+        ) AS parent_rank
+      FROM combined c
+      JOIN documents d ON d.id = c.doc_id
+    ) ranked
+    WHERE parent_rank = 1
     ORDER BY rrf_score DESC
     LIMIT match_count
   )
 
-  -- Parent expansion: if child matched and has a parent, return parent text
+  -- Return child text with context — no parent text replacement
+  -- The child's context_text (from contextual retrieval) already provides
+  -- document-level context. Returning child text keeps results specific.
   SELECT
     d.id,
-    COALESCE(p.title, d.title) AS title,
-    CASE
-      WHEN p_expand_parent AND d.parent_id IS NOT NULL
-        THEN COALESCE(p.text, d.text)
-      ELSE d.text
-    END AS body,
+    d.title,
+    d.text AS body,
     d.type AS doc_type,
     d.category,
     d.scope,
-    COALESCE(p.section_path, d.section_path) AS section_path,
+    d.section_path,
     d.context_text,
     d.is_active,
     d.hooks,
@@ -386,7 +396,6 @@ AS $$
     t.rrf_score AS score
   FROM top_results t
   JOIN documents d ON d.id = t.doc_id
-  LEFT JOIN documents p ON p.id = d.parent_id AND p_expand_parent
   ORDER BY t.rrf_score DESC;
 $$;
 
@@ -412,16 +421,16 @@ LANGUAGE sql
 AS $$
   SELECT
     d.id,
-    COALESCE(p.title, d.title) AS title,
-    COALESCE(p.text, d.text) AS body,
+    d.title,
+    d.text AS body,
     d.type AS doc_type,
     d.hooks,
     d.is_active,
     d.metadata
   FROM documents d
-  LEFT JOIN documents p ON p.id = d.parent_id
   WHERE (d.project_id = p_project_id OR d.scope = 'global')
     AND p_hook_name = ANY(d.hooks)
+    AND d.is_parent = false
   ORDER BY d.is_active DESC, d.priority ASC
   LIMIT match_count;
 $$;

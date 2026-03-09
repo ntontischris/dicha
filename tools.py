@@ -135,7 +135,7 @@ def search_code(query: str, category: str = "") -> str:
         "query_embedding": embedding,
         "match_count": 30,
         "p_project_id": config.get_project_id(),
-        "p_expand_parent": True,
+
         "p_doc_types": _CODE_DOC_TYPES,
     }
     if category:
@@ -171,7 +171,7 @@ def search_docs(query: str, category: str = "") -> str:
         "query_embedding": embedding,
         "match_count": 30,
         "p_project_id": config.get_project_id(),
-        "p_expand_parent": True,
+
         "p_doc_types": _DOCS_DOC_TYPES,
     }
     if category:
