@@ -288,7 +288,8 @@ CREATE OR REPLACE FUNCTION hybrid_search(
   p_project_id    text,
   p_category      text DEFAULT NULL,
   p_expand_parent boolean DEFAULT true,
-  rrf_k           int DEFAULT 50
+  rrf_k           int DEFAULT 50,
+  p_doc_types     text[] DEFAULT NULL
 )
 RETURNS TABLE (
   id           bigint,
@@ -298,6 +299,7 @@ RETURNS TABLE (
   category     text,
   scope        text,
   section_path text,
+  context_text text,
   is_active    boolean,
   hooks        text[],
   metadata     jsonb,
@@ -306,13 +308,14 @@ RETURNS TABLE (
 LANGUAGE sql
 AS $$
   WITH
-  -- Scope: this project's docs + global docs, optional category filter
+  -- Scope: this project's docs + global docs, optional category + doc_type filter
   -- Exclude parent-only rows (search children, expand to parents)
   eligible AS (
     SELECT d.id
     FROM documents d
     WHERE (d.project_id = p_project_id OR d.scope = 'global')
       AND (p_category IS NULL OR d.category = p_category)
+      AND (p_doc_types IS NULL OR d.type = ANY(p_doc_types))
       AND (d.is_parent = false)
   ),
 
@@ -376,6 +379,7 @@ AS $$
     d.category,
     d.scope,
     COALESCE(p.section_path, d.section_path) AS section_path,
+    d.context_text,
     d.is_active,
     d.hooks,
     d.metadata,

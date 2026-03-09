@@ -9,7 +9,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 PROJECT_ID = os.getenv("PROJECT_ID", "test-shop-1")
-MODEL = os.getenv("MODEL", "gpt-4o-mini")
+MODEL = os.getenv("MODEL", "gpt-4.1")
 
 # Thread-local project ID override (for concurrent chat requests)
 _local = threading.local()

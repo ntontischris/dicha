@@ -101,6 +101,10 @@ def _rerank(query: str, documents: list[dict], top_n: int = 5) -> list[dict]:
 
 # -- Tool: search_code ------------------------------------------------
 
+_CODE_DOC_TYPES = ["code_snippet", "functions_php", "theme_file"]
+_DOCS_DOC_TYPES = ["company_doc", "project_doc"]
+
+
 def search_code(query: str, category: str = "") -> str:
     """Search project code: snippets, functions.php, theme files.
 
@@ -118,6 +122,7 @@ def search_code(query: str, category: str = "") -> str:
         "match_count": 30,
         "p_project_id": config.get_project_id(),
         "p_expand_parent": True,
+        "p_doc_types": _CODE_DOC_TYPES,
     }
     if category:
         payload["p_category"] = category
@@ -153,6 +158,7 @@ def search_docs(query: str, category: str = "") -> str:
         "match_count": 30,
         "p_project_id": config.get_project_id(),
         "p_expand_parent": True,
+        "p_doc_types": _DOCS_DOC_TYPES,
     }
     if category:
         payload["p_category"] = category
@@ -273,6 +279,16 @@ def _format_config(data: dict) -> str:
             for r in rates[:5]:
                 parts.append(f"- Rate: {r.get('rate', '')}% ({r.get('name', '')})")
 
+    # General settings
+    general = data.get("wc_general_settings") or {}
+    if general:
+        parts.append(f"\n=== General Settings ===")
+        parts.append(f"Currency: {general.get('currency', '?')} (position: {general.get('currency_position', '?')})")
+        parts.append(f"Store location: {general.get('store_country', '?')}, {general.get('store_city', '?')}")
+        parts.append(f"Coupons enabled: {general.get('enable_coupons')}")
+        parts.append(f"Guest checkout: {general.get('enable_guest_checkout')}")
+        parts.append(f"Stock management: {general.get('manage_stock')}")
+
     # Active plugins
     plugins = data.get("active_plugins") or []
     if plugins:
@@ -299,12 +315,14 @@ def _format_results(results: list[dict]) -> str:
         hooks_str = f"\nHooks: {', '.join(hooks)}" if hooks else ""
         section = doc.get("section_path", "")
         section_str = f"\nSection: {section}" if section else ""
+        context = doc.get("context_text", "")
+        context_str = f"\nContext: {context}" if context else ""
         score = doc.get("score", 0)
         text = doc.get("body") or doc.get("text") or ""
 
         parts.append(
             f"[{i}] {doc.get('title', 'Untitled')}{flag}{scope_tag}{cat_tag}"
-            f"  (score={score:.4f}){hooks_str}{section_str}\n{text}"
+            f"  (score={score:.4f}){hooks_str}{section_str}{context_str}\n{text}"
         )
 
     return "\n\n" + ("\n" + "=" * 60 + "\n\n").join(parts)
@@ -318,17 +336,21 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "search_code",
             "description": (
-                "Search project code: snippets, functions.php, theme files, and custom code "
+                "Search project CODE ONLY: snippets, functions.php, theme files, and custom code "
                 "using hybrid vector + keyword search with AI reranking. "
+                "Returns only code documents — never documentation or guides. "
                 "Use for: finding custom code, hooks, filters, understanding why something "
-                "behaves a certain way, finding specific function names or implementations."
+                "behaves a certain way, finding specific function names or implementations. "
+                "RETRY STRATEGY: If no results, try without category filter. If wrong results, "
+                "add a category or use more specific technical terms. "
+                "IMPORTANT: Always search in English even if the user asks in Greek."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Natural language or technical search query",
+                        "description": "Technical search query in English (translate from user's language if needed)",
                     },
                     "category": {
                         "type": "string",
@@ -337,7 +359,7 @@ TOOL_SCHEMAS = [
                             "products", "orders", "emails", "theme", "security",
                             "performance", "general",
                         ],
-                        "description": "Optional: filter by WooCommerce area for more precise results",
+                        "description": "Optional: filter by WooCommerce area. Omit for broader results, add for precision.",
                     },
                 },
                 "required": ["query"],
@@ -349,17 +371,21 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "search_docs",
             "description": (
-                "Search documentation: company technical guides, how-to articles, "
+                "Search DOCUMENTATION ONLY: company technical guides, how-to articles, "
                 "WooCommerce best practices, and project-specific notes. "
+                "Returns only documentation — never code snippets. "
                 "Use for: finding how to implement something, troubleshooting guides, "
-                "best practices, agency knowledge base."
+                "best practices, agency knowledge base, client notes. "
+                "RETRY STRATEGY: If no results, broaden the query or remove category. "
+                "If too generic, add category filter. "
+                "IMPORTANT: Always search in English even if the user asks in Greek."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Natural language search query about documentation",
+                        "description": "Search query in English about documentation topics",
                     },
                     "category": {
                         "type": "string",
@@ -381,9 +407,11 @@ TOOL_SCHEMAS = [
             "name": "search_by_hook",
             "description": (
                 "Find all code that uses a specific WordPress/WooCommerce hook or filter. "
-                "Direct lookup — fast and precise. "
+                "Direct GIN index lookup — fast and precise. "
                 "Use when you know the exact hook name (e.g. 'woocommerce_package_rates', "
-                "'woocommerce_checkout_fields', 'wp_enqueue_scripts')."
+                "'woocommerce_checkout_fields', 'wp_enqueue_scripts'). "
+                "FOLLOW-UP: After finding hook usage, use search_code() to find related code "
+                "that may interact with the same functionality."
             ),
             "parameters": {
                 "type": "object",
@@ -405,9 +433,11 @@ TOOL_SCHEMAS = [
                 "Get complete structured shop configuration in one call: "
                 "WordPress/WooCommerce/PHP versions, active theme, "
                 "payment gateways, shipping zones & methods, tax settings, "
+                "general settings (currency, country, coupons, guest checkout, stock), "
                 "all active plugins with versions. "
                 "Use FIRST for: version checks, config questions, plugin lists, "
-                "shipping/payment setup, tax configuration, general store status."
+                "shipping/payment setup, tax configuration, currency, store location, "
+                "general store status. Also use as context when debugging any issue."
             ),
             "parameters": {
                 "type": "object",

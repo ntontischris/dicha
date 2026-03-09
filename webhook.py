@@ -27,6 +27,7 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
@@ -384,7 +385,7 @@ async def list_docs(
 
     # Build Supabase REST query
     url = f"{config.SUPABASE_URL}/rest/v1/documents"
-    params = f"project_id=eq.{project_id}&select=id,title,type,category,scope,is_active,synced_at&order=synced_at.desc&limit=100"
+    params = f"project_id=eq.{project_id}&select=id,title,type,category,scope,is_active,synced_at&order=synced_at.desc&limit=500"
     if doc_type:
         params += f"&type=eq.{doc_type}"
 
@@ -401,6 +402,83 @@ async def list_docs(
         "count": len(docs),
         "project_id": project_id,
     }
+
+
+@app.get("/docs/{doc_id}")
+async def get_doc(
+    doc_id: str,
+    x_webhook_secret: str = Header(default=""),
+    authorization: str = Header(default=""),
+):
+    """Get a single document by ID (includes full text content)."""
+    _verify_secret(x_webhook_secret, authorization)
+
+    http = app.state.http_client
+    url = f"{config.SUPABASE_URL}/rest/v1/documents"
+    params = f"id=eq.{doc_id}&select=id,title,text,type,category,scope,project_id,is_active,synced_at"
+
+    headers = {
+        "apikey": config.SUPABASE_KEY,
+        "Authorization": f"Bearer {config.SUPABASE_KEY}",
+    }
+    r = await http.get(f"{url}?{params}", headers=headers)
+    r.raise_for_status()
+
+    docs = r.json()
+    if not docs:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    return docs[0]
+
+
+@app.get("/api/projects")
+async def list_projects(
+    x_webhook_secret: str = Header(default=""),
+    authorization: str = Header(default=""),
+):
+    """List all projects for admin dashboard."""
+    _verify_secret(x_webhook_secret, authorization)
+
+    http = app.state.http_client
+    url = f"{config.SUPABASE_URL}/rest/v1/projects"
+    params = "select=project_id,site_url,wp_version,wc_version,php_version,theme_name,active_plugins_count,last_sync&order=last_sync.desc"
+    headers = {
+        "apikey": config.SUPABASE_KEY,
+        "Authorization": f"Bearer {config.SUPABASE_KEY}",
+    }
+    r = await http.get(f"{url}?{params}", headers=headers)
+    r.raise_for_status()
+
+    return {"projects": r.json()}
+
+
+@app.delete("/docs/{doc_id}")
+async def delete_single_doc(
+    doc_id: str,
+    x_webhook_secret: str = Header(default=""),
+    authorization: str = Header(default=""),
+):
+    """Delete a single document by ID."""
+    _verify_secret(x_webhook_secret, authorization)
+
+    http = app.state.http_client
+    url = f"{config.SUPABASE_URL}/rest/v1/documents?id=eq.{doc_id}"
+    headers = {
+        "apikey": config.SUPABASE_KEY,
+        "Authorization": f"Bearer {config.SUPABASE_KEY}",
+        "Prefer": "return=minimal",
+    }
+    r = await http.delete(url, headers=headers)
+    r.raise_for_status()
+
+    return {"status": "ok", "deleted_id": doc_id}
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_dashboard():
+    """Serve the admin dashboard SPA."""
+    html_path = Path(__file__).parent / "admin" / "index.html"
+    return HTMLResponse(html_path.read_text(encoding="utf-8"))
 
 
 @app.get("/health")

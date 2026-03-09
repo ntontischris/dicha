@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html lang="el" x-data="app()" x-init="init()">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dicha — Knowledge Base Admin</title>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+  <style>
+    [x-cloak] { display: none !important; }
+    body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background: #0f172a; color: #e2e8f0; }
+    .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(148, 163, 184, 0.1); }
+    .glass-light { background: rgba(30, 41, 59, 0.4); border: 1px solid rgba(148, 163, 184, 0.08); }
+    .gradient-text { background: linear-gradient(135deg, #818cf8, #c084fc, #f472b6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .btn-primary { background: linear-gradient(135deg, #6366f1, #8b5cf6); transition: all 0.2s; }
+    .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 20px rgba(99, 102, 241, 0.4); }
+    .btn-danger { background: linear-gradient(135deg, #ef4444, #dc2626); }
+    .btn-danger:hover { box-shadow: 0 4px 20px rgba(239, 68, 68, 0.4); }
+    .input-field { background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(148, 163, 184, 0.2); color: #e2e8f0; transition: border-color 0.2s; }
+    .input-field:focus { border-color: #818cf8; outline: none; box-shadow: 0 0 0 3px rgba(129, 140, 248, 0.15); }
+    .input-field::placeholder { color: #64748b; }
+    textarea.input-field { resize: vertical; min-height: 200px; }
+    .badge { font-size: 0.7rem; padding: 0.15rem 0.5rem; border-radius: 9999px; font-weight: 600; letter-spacing: 0.02em; }
+    .badge-blue { background: rgba(99, 102, 241, 0.2); color: #a5b4fc; }
+    .badge-green { background: rgba(34, 197, 94, 0.2); color: #86efac; }
+    .badge-purple { background: rgba(168, 85, 247, 0.2); color: #d8b4fe; }
+    .badge-amber { background: rgba(245, 158, 11, 0.2); color: #fcd34d; }
+    .doc-card { transition: all 0.2s; }
+    .doc-card:hover { background: rgba(51, 65, 85, 0.5); transform: translateX(4px); }
+    .fade-in { animation: fadeIn 0.3s ease-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    .nav-item { transition: all 0.2s; border-left: 3px solid transparent; }
+    .nav-item:hover { background: rgba(99, 102, 241, 0.08); }
+    .nav-item.active { background: rgba(99, 102, 241, 0.15); border-left-color: #818cf8; color: #818cf8; }
+    .stat-card { background: linear-gradient(135deg, rgba(30, 41, 59, 0.8), rgba(30, 41, 59, 0.4)); }
+    .scrollbar-thin::-webkit-scrollbar { width: 4px; }
+    .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+    .scrollbar-thin::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
+    .toast { animation: slideIn 0.3s ease-out, fadeOut 0.3s ease-in 2.7s; }
+    @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+    @keyframes fadeOut { to { opacity: 0; } }
+    .modal-overlay { background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(4px); }
+    .pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+    .file-drop { border: 2px dashed rgba(148, 163, 184, 0.3); transition: all 0.2s; }
+    .file-drop:hover, .file-drop.dragover { border-color: #818cf8; background: rgba(99, 102, 241, 0.05); }
+  </style>
+</head>
+<body class="min-h-screen">
+
+<!-- Toast notifications -->
+<div class="fixed top-4 right-4 z-50 space-y-2">
+  <template x-for="(toast, i) in toasts" :key="i">
+    <div class="toast glass px-4 py-3 rounded-lg shadow-xl flex items-center gap-2 min-w-64"
+         :class="toast.type === 'error' ? 'border-red-500/30' : 'border-green-500/30'">
+      <span x-text="toast.type === 'error' ? '!' : '&#10003;'"
+            class="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold"
+            :class="toast.type === 'error' ? 'bg-red-500/20 text-red-400' : 'bg-green-500/20 text-green-400'"></span>
+      <span class="text-sm" x-text="toast.message"></span>
+    </div>
+  </template>
+</div>
+
+<!-- Delete confirmation modal -->
+<div x-show="deleteModal.show" x-cloak class="fixed inset-0 z-40 flex items-center justify-center modal-overlay" @click.self="deleteModal.show = false">
+  <div class="glass rounded-xl p-6 max-w-md w-full mx-4 fade-in" @click.stop>
+    <h3 class="text-lg font-semibold text-white mb-2">Confirm Deletion</h3>
+    <p class="text-slate-400 text-sm mb-1">This action cannot be undone.</p>
+    <p class="text-slate-300 text-sm mb-6" x-text="'Delete: ' + deleteModal.title + '?'"></p>
+    <div class="flex gap-3 justify-end">
+      <button @click="deleteModal.show = false"
+              class="px-4 py-2 rounded-lg text-sm text-slate-400 hover:text-white glass-light">
+        Cancel
+      </button>
+      <button @click="confirmDelete()"
+              class="px-4 py-2 rounded-lg text-sm text-white btn-danger">
+        Delete
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Doc content viewer modal -->
+<div x-show="viewModal.show" x-cloak class="fixed inset-0 z-40 flex items-center justify-center modal-overlay" @click.self="viewModal.show = false">
+  <div class="glass rounded-xl max-w-3xl w-full mx-4 max-h-screen overflow-hidden fade-in flex flex-col" style="max-height:85vh" @click.stop>
+    <div class="p-6 border-b border-slate-700/50 flex items-start justify-between flex-shrink-0">
+      <div>
+        <h3 class="text-lg font-semibold text-white" x-text="viewModal.title"></h3>
+        <div class="flex gap-2 mt-2">
+          <span class="badge badge-blue" x-text="viewModal.category"></span>
+          <span class="badge badge-purple" x-text="viewModal.type"></span>
+        </div>
+      </div>
+      <button @click="viewModal.show = false" class="text-slate-400 hover:text-white text-xl leading-none">&times;</button>
+    </div>
+    <div class="p-6 overflow-y-auto scrollbar-thin flex-1">
+      <pre class="text-sm text-slate-300 whitespace-pre-wrap font-sans leading-relaxed" x-text="viewModal.content"></pre>
+    </div>
+    <div class="p-4 border-t border-slate-700/50 flex-shrink-0">
+      <span class="text-xs text-slate-500" x-text="'ID: ' + viewModal.id + '  |  Synced: ' + formatDate(viewModal.synced_at)"></span>
+    </div>
+  </div>
+</div>
+
+<!-- Login screen -->
+<div x-show="!authenticated" x-cloak class="min-h-screen flex items-center justify-center">
+  <div class="glass rounded-2xl p-8 w-full max-w-sm fade-in">
+    <h1 class="text-2xl font-bold gradient-text text-center mb-2">Dicha Admin</h1>
+    <p class="text-slate-500 text-sm text-center mb-8">Enter your API token to continue</p>
+    <input type="password" x-model="tokenInput" @keydown.enter="login()"
+           placeholder="Webhook Secret"
+           class="input-field w-full rounded-lg px-4 py-3 text-sm mb-4">
+    <button @click="login()" class="btn-primary px-6 py-3 rounded-lg text-sm text-white font-medium w-full">
+      Sign In
+    </button>
+    <p x-show="loginError" class="text-red-400 text-xs text-center mt-3" x-text="loginError"></p>
+  </div>
+</div>
+
+<!-- Layout -->
+<div x-show="authenticated" x-cloak class="flex min-h-screen">
+
+  <!-- Sidebar -->
+  <aside class="w-64 glass border-r border-slate-700/30 flex flex-col flex-shrink-0 sticky top-0 h-screen">
+    <div class="p-6 border-b border-slate-700/30">
+      <h1 class="text-xl font-bold gradient-text">Dicha Admin</h1>
+      <p class="text-xs text-slate-500 mt-1">Knowledge Base Manager</p>
+    </div>
+
+    <nav class="flex-1 py-4 space-y-1">
+      <button @click="page = 'docs'" class="nav-item w-full text-left px-6 py-3 text-sm"
+              :class="page === 'docs' && 'active'">
+        <span class="mr-2">&#128203;</span> Company Docs
+      </button>
+      <button @click="page = 'upload'" class="nav-item w-full text-left px-6 py-3 text-sm"
+              :class="page === 'upload' && 'active'">
+        <span class="mr-2">&#10010;</span> Upload Document
+      </button>
+      <button @click="page = 'bulk'" class="nav-item w-full text-left px-6 py-3 text-sm"
+              :class="page === 'bulk' && 'active'">
+        <span class="mr-2">&#128193;</span> Bulk Upload
+      </button>
+      <button @click="page = 'projects'; loadProjects()" class="nav-item w-full text-left px-6 py-3 text-sm"
+              :class="page === 'projects' && 'active'">
+        <span class="mr-2">&#128269;</span> All Projects
+      </button>
+    </nav>
+
+    <div class="p-4 border-t border-slate-700/30 space-y-2">
+      <div class="text-xs text-slate-500">
+        <span x-text="'Docs: ' + (docs.length || '...')"></span>
+      </div>
+      <button @click="logout()" class="text-xs text-slate-500 hover:text-red-400 transition-colors">
+        Logout
+      </button>
+    </div>
+  </aside>
+
+  <!-- Main content -->
+  <main class="flex-1 overflow-y-auto scrollbar-thin">
+
+    <!-- ═══════════════ Company Docs ═══════════════ -->
+    <div x-show="page === 'docs'" x-cloak class="p-8 fade-in">
+      <div class="flex items-center justify-between mb-8">
+        <div>
+          <h2 class="text-2xl font-bold text-white">Company Knowledge Base</h2>
+          <p class="text-slate-400 text-sm mt-1">Global knowledge visible to all projects</p>
+        </div>
+        <button @click="loadDocs()" class="btn-primary px-4 py-2 rounded-lg text-sm text-white">
+          Refresh
+        </button>
+      </div>
+
+      <!-- Stats -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+        <div class="stat-card rounded-xl p-4 border border-slate-700/30">
+          <p class="text-xs text-slate-500 uppercase tracking-wider">Total Docs</p>
+          <p class="text-2xl font-bold text-white mt-1" x-text="docs.length"></p>
+        </div>
+        <div class="stat-card rounded-xl p-4 border border-slate-700/30">
+          <p class="text-xs text-slate-500 uppercase tracking-wider">Categories</p>
+          <p class="text-2xl font-bold text-white mt-1" x-text="Object.keys(docsByCategory).length"></p>
+        </div>
+        <div class="stat-card rounded-xl p-4 border border-slate-700/30">
+          <p class="text-xs text-slate-500 uppercase tracking-wider">Company Docs</p>
+          <p class="text-2xl font-bold text-white mt-1" x-text="docs.filter(d => d.type === 'company_doc').length"></p>
+        </div>
+        <div class="stat-card rounded-xl p-4 border border-slate-700/30">
+          <p class="text-xs text-slate-500 uppercase tracking-wider">Active</p>
+          <p class="text-2xl font-bold text-white mt-1" x-text="docs.filter(d => d.is_active).length"></p>
+        </div>
+      </div>
+
+      <!-- Filters -->
+      <div class="flex gap-3 mb-6 flex-wrap">
+        <select x-model="catFilter" class="input-field rounded-lg px-3 py-2 text-sm">
+          <option value="">All Categories</option>
+          <template x-for="cat in Object.keys(docsByCategory).sort()">
+            <option :value="cat" x-text="cat + ' (' + docsByCategory[cat].length + ')'"></option>
+          </template>
+        </select>
+        <input type="text" x-model="searchQuery" placeholder="Search by title..."
+               class="input-field rounded-lg px-3 py-2 text-sm flex-1 max-w-xs">
+      </div>
+
+      <!-- Loading -->
+      <div x-show="loading" class="text-center py-12">
+        <div class="inline-block w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+        <p class="text-slate-400 text-sm mt-3">Loading documents...</p>
+      </div>
+
+      <!-- Empty state -->
+      <div x-show="!loading && filteredDocs.length === 0" class="text-center py-16">
+        <p class="text-4xl mb-3">&#128218;</p>
+        <p class="text-slate-400">No documents found.</p>
+        <button @click="page = 'upload'" class="btn-primary px-4 py-2 rounded-lg text-sm text-white mt-4">Upload your first doc</button>
+      </div>
+
+      <!-- Docs list -->
+      <div x-show="!loading" class="space-y-2">
+        <template x-for="doc in filteredDocs" :key="doc.id">
+          <div class="doc-card glass-light rounded-lg px-5 py-4 flex items-center justify-between group">
+            <div class="flex-1 min-w-0">
+              <p class="text-white font-medium truncate" x-text="doc.title"></p>
+              <div class="flex gap-2 mt-1.5 flex-wrap">
+                <span class="badge badge-blue" x-text="doc.category"></span>
+                <span class="badge badge-purple" x-text="doc.type"></span>
+                <span class="badge" :class="doc.is_active ? 'badge-green' : 'badge-amber'"
+                      x-text="doc.is_active ? 'Active' : 'Inactive'"></span>
+                <span class="text-xs text-slate-500 ml-2" x-text="formatDate(doc.synced_at)"></span>
+              </div>
+            </div>
+            <div class="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity ml-4">
+              <button @click="viewDoc(doc.id)" class="px-3 py-1.5 rounded-lg text-xs glass-light text-slate-300 hover:text-white">
+                View
+              </button>
+              <button @click="promptDelete(doc.id, doc.title)" class="px-3 py-1.5 rounded-lg text-xs text-red-400 hover:text-red-300 glass-light">
+                Delete
+              </button>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- ═══════════════ Upload Document ═══════════════ -->
+    <div x-show="page === 'upload'" x-cloak class="p-8 fade-in">
+      <div class="max-w-2xl">
+        <h2 class="text-2xl font-bold text-white mb-2">Upload Document</h2>
+        <p class="text-slate-400 text-sm mb-8">Add a new document to the company knowledge base. It will be automatically chunked, embedded, and available to all projects.</p>
+
+        <div class="space-y-5">
+          <div>
+            <label class="block text-sm text-slate-400 mb-1.5">Title</label>
+            <input type="text" x-model="upload.title" placeholder="e.g. Shipping Setup Guide"
+                   class="input-field w-full rounded-lg px-4 py-3 text-sm">
+          </div>
+
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-sm text-slate-400 mb-1.5">Category</label>
+              <select x-model="upload.category" class="input-field w-full rounded-lg px-4 py-3 text-sm">
+                <template x-for="cat in categories">
+                  <option :value="cat" x-text="cat"></option>
+                </template>
+              </select>
+            </div>
+            <div>
+              <label class="block text-sm text-slate-400 mb-1.5">Priority</label>
+              <select x-model="upload.priority" class="input-field w-full rounded-lg px-4 py-3 text-sm">
+                <option value="1">Critical</option>
+                <option value="2">Important</option>
+                <option value="3" selected>Normal</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-sm text-slate-400 mb-1.5">Content (Markdown supported)</label>
+            <textarea x-model="upload.content" placeholder="Write or paste your content here..."
+                      class="input-field w-full rounded-lg px-4 py-3 text-sm" rows="14"></textarea>
+          </div>
+
+          <button @click="submitUpload()" :disabled="uploading"
+                  class="btn-primary px-6 py-3 rounded-lg text-sm text-white font-medium w-full disabled:opacity-50">
+            <span x-show="!uploading">Upload &amp; Embed</span>
+            <span x-show="uploading" class="flex items-center justify-center gap-2">
+              <span class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+              Processing...
+            </span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════ Bulk Upload ═══════════════ -->
+    <div x-show="page === 'bulk'" x-cloak class="p-8 fade-in">
+      <div class="max-w-2xl">
+        <h2 class="text-2xl font-bold text-white mb-2">Bulk Upload</h2>
+        <p class="text-slate-400 text-sm mb-8">Upload multiple Markdown files at once. Each file becomes one document.</p>
+
+        <div class="space-y-5">
+          <div>
+            <label class="block text-sm text-slate-400 mb-1.5">Category (applied to all)</label>
+            <select x-model="bulkCategory" class="input-field w-full rounded-lg px-4 py-3 text-sm">
+              <template x-for="cat in categories">
+                <option :value="cat" x-text="cat"></option>
+              </template>
+            </select>
+          </div>
+
+          <!-- Drop zone -->
+          <div class="file-drop rounded-xl p-12 text-center cursor-pointer"
+               @click="$refs.fileInput.click()"
+               @dragover.prevent="$event.currentTarget.classList.add('dragover')"
+               @dragleave.prevent="$event.currentTarget.classList.remove('dragover')"
+               @drop.prevent="handleFileDrop($event)">
+            <p class="text-3xl mb-3">&#128196;</p>
+            <p class="text-slate-300 font-medium">Drop .md or .txt files here</p>
+            <p class="text-slate-500 text-sm mt-1">or click to browse</p>
+            <input type="file" x-ref="fileInput" @change="handleFileSelect($event)" multiple accept=".md,.txt" class="hidden">
+          </div>
+
+          <!-- Selected files -->
+          <div x-show="bulkFiles.length > 0" class="space-y-2">
+            <p class="text-sm text-slate-400" x-text="bulkFiles.length + ' files selected'"></p>
+            <template x-for="(file, i) in bulkFiles" :key="i">
+              <div class="glass-light rounded-lg px-4 py-2.5 flex items-center justify-between text-sm">
+                <span class="text-slate-300 truncate" x-text="file.name"></span>
+                <div class="flex items-center gap-3">
+                  <span class="text-slate-500 text-xs" x-text="formatSize(file.size)"></span>
+                  <button @click="bulkFiles.splice(i, 1)" class="text-red-400 hover:text-red-300">&times;</button>
+                </div>
+              </div>
+            </template>
+
+            <button @click="submitBulkUpload()" :disabled="bulkUploading"
+                    class="btn-primary px-6 py-3 rounded-lg text-sm text-white font-medium w-full mt-4 disabled:opacity-50">
+              <span x-show="!bulkUploading">Upload All</span>
+              <span x-show="bulkUploading" class="flex items-center justify-center gap-2">
+                <span class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                <span x-text="'Uploading ' + bulkProgress + '/' + bulkFiles.length + '...'"></span>
+              </span>
+            </button>
+          </div>
+
+          <!-- Bulk results -->
+          <div x-show="bulkResults.length > 0" class="space-y-2 mt-4">
+            <h3 class="text-sm font-medium text-slate-400">Results</h3>
+            <template x-for="(r, i) in bulkResults" :key="i">
+              <div class="glass-light rounded-lg px-4 py-2.5 flex items-center justify-between text-sm"
+                   :class="r.error ? 'border border-red-500/30' : 'border border-green-500/30'">
+                <span class="truncate" :class="r.error ? 'text-red-400' : 'text-green-400'" x-text="r.title"></span>
+                <span class="text-xs text-slate-500" x-text="r.error || (r.chunks + ' chunks')"></span>
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════ All Projects ═══════════════ -->
+    <div x-show="page === 'projects'" x-cloak class="p-8 fade-in">
+      <h2 class="text-2xl font-bold text-white mb-2">All Projects</h2>
+      <p class="text-slate-400 text-sm mb-8">Browse documents for each synced WooCommerce project.</p>
+
+      <!-- Loading -->
+      <div x-show="projectsLoading" class="text-center py-12">
+        <div class="inline-block w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+      </div>
+
+      <!-- Project cards -->
+      <div x-show="!projectsLoading && projects.length > 0" class="space-y-4">
+        <template x-for="proj in projects" :key="proj.project_id">
+          <div class="glass rounded-xl overflow-hidden">
+            <!-- Project header -->
+            <button @click="toggleProject(proj.project_id)"
+                    class="w-full px-6 py-4 flex items-center justify-between hover:bg-slate-800/30 transition-colors">
+              <div class="text-left">
+                <p class="text-white font-semibold" x-text="proj.project_id"></p>
+                <p class="text-slate-500 text-xs mt-0.5" x-text="proj.site_url || 'No URL'"></p>
+              </div>
+              <div class="flex items-center gap-4">
+                <div class="text-right hidden sm:block">
+                  <p class="text-xs text-slate-500">
+                    <span x-text="'WP ' + (proj.wp_version || '?')"></span>
+                    <span class="mx-1">|</span>
+                    <span x-text="'WC ' + (proj.wc_version || '?')"></span>
+                    <span class="mx-1">|</span>
+                    <span x-text="'PHP ' + (proj.php_version || '?')"></span>
+                  </p>
+                  <p class="text-xs text-slate-500 mt-0.5" x-text="(proj.active_plugins_count || 0) + ' plugins | ' + formatDate(proj.last_sync)"></p>
+                </div>
+                <span class="text-slate-500 transition-transform" :class="expandedProject === proj.project_id && 'rotate-180'">&#9660;</span>
+              </div>
+            </button>
+
+            <!-- Project docs -->
+            <div x-show="expandedProject === proj.project_id" x-cloak class="border-t border-slate-700/30">
+              <div x-show="projectDocsLoading" class="p-6 text-center">
+                <div class="inline-block w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+              </div>
+
+              <div x-show="!projectDocsLoading && projectDocs.length === 0" class="p-6 text-center text-slate-500 text-sm">
+                No documents for this project.
+              </div>
+
+              <div x-show="!projectDocsLoading && projectDocs.length > 0" class="p-4">
+                <!-- Type filter and stats -->
+                <div class="flex items-center gap-3 mb-3 flex-wrap">
+                  <span class="text-xs text-slate-400" x-text="projectDocs.length + ' documents'"></span>
+                  <template x-for="[type, count] in Object.entries(projectDocTypes)" :key="type">
+                    <button @click="projectTypeFilter = projectTypeFilter === type ? '' : type"
+                            class="badge cursor-pointer"
+                            :class="projectTypeFilter === type ? 'badge-blue' : 'badge-purple'"
+                            x-text="type + ' (' + count + ')'">
+                    </button>
+                  </template>
+                </div>
+
+                <!-- Docs -->
+                <div class="space-y-1.5 max-h-96 overflow-y-auto scrollbar-thin">
+                  <template x-for="doc in filteredProjectDocs" :key="doc.id">
+                    <div class="doc-card rounded-lg px-4 py-2.5 flex items-center justify-between group glass-light">
+                      <div class="flex-1 min-w-0">
+                        <p class="text-sm text-slate-300 truncate" x-text="doc.title"></p>
+                        <div class="flex gap-2 mt-1">
+                          <span class="badge badge-blue" x-text="doc.category"></span>
+                          <span class="badge badge-purple" x-text="doc.type"></span>
+                        </div>
+                      </div>
+                      <button @click="viewDoc(doc.id)" class="px-3 py-1 rounded text-xs glass-light text-slate-400 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity">
+                        View
+                      </button>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <div x-show="!projectsLoading && projects.length === 0" class="text-center py-16 text-slate-500">
+        No projects synced yet.
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+function app() {
+  function getToken() {
+    return localStorage.getItem('dicha_token') || '';
+  }
+
+  function headers() {
+    return { 'Content-Type': 'application/json', 'X-Webhook-Secret': getToken() };
+  }
+
+  return {
+    // Auth
+    authenticated: !!localStorage.getItem('dicha_token'),
+    tokenInput: '',
+    loginError: '',
+
+    // State
+    page: 'docs',
+    loading: false,
+    docs: [],
+    catFilter: '',
+    searchQuery: '',
+    toasts: [],
+
+    // Upload
+    upload: { title: '', content: '', category: 'general', priority: 3 },
+    uploading: false,
+
+    // Bulk
+    bulkCategory: 'general',
+    bulkFiles: [],
+    bulkUploading: false,
+    bulkProgress: 0,
+    bulkResults: [],
+
+    // Projects
+    projects: [],
+    projectsLoading: false,
+    expandedProject: '',
+    projectDocs: [],
+    projectDocsLoading: false,
+    projectTypeFilter: '',
+
+    // Modals
+    deleteModal: { show: false, id: null, title: '' },
+    viewModal: { show: false, id: '', title: '', content: '', category: '', type: '', synced_at: '' },
+
+    categories: ['general', 'shipping', 'payments', 'checkout', 'cart', 'tax', 'products', 'orders', 'emails', 'theme', 'security', 'performance'],
+
+    get docsByCategory() {
+      const map = {};
+      this.docs.forEach(d => {
+        const cat = d.category || 'general';
+        (map[cat] = map[cat] || []).push(d);
+      });
+      return map;
+    },
+
+    get filteredDocs() {
+      return this.docs.filter(d => {
+        if (this.catFilter && d.category !== this.catFilter) return false;
+        if (this.searchQuery && !d.title.toLowerCase().includes(this.searchQuery.toLowerCase())) return false;
+        return true;
+      });
+    },
+
+    get projectDocTypes() {
+      const map = {};
+      this.projectDocs.forEach(d => {
+        const t = d.type || 'unknown';
+        map[t] = (map[t] || 0) + 1;
+      });
+      return map;
+    },
+
+    get filteredProjectDocs() {
+      if (!this.projectTypeFilter) return this.projectDocs;
+      return this.projectDocs.filter(d => d.type === this.projectTypeFilter);
+    },
+
+    // Auth
+    async login() {
+      if (!this.tokenInput) { this.loginError = 'Token is required'; return; }
+      localStorage.setItem('dicha_token', this.tokenInput);
+      try {
+        const r = await fetch('/docs?project_id=_global', { headers: headers() });
+        if (!r.ok) throw new Error();
+        this.authenticated = true;
+        this.loginError = '';
+        await this.loadDocs();
+      } catch (e) {
+        localStorage.removeItem('dicha_token');
+        this.authenticated = false;
+        this.loginError = 'Invalid token or server unreachable';
+      }
+    },
+
+    logout() {
+      localStorage.removeItem('dicha_token');
+      this.authenticated = false;
+      this.tokenInput = '';
+    },
+
+    // Init
+    async init() {
+      if (this.authenticated) await this.loadDocs();
+    },
+
+    // API calls
+    async loadDocs() {
+      this.loading = true;
+      try {
+        const r = await fetch('/docs?project_id=_global', { headers: headers() });
+        const data = await r.json();
+        this.docs = data.documents || [];
+      } catch (e) {
+        this.toast('Failed to load documents', 'error');
+      }
+      this.loading = false;
+    },
+
+    async loadProjects() {
+      this.projectsLoading = true;
+      try {
+        const r = await fetch('/api/projects', { headers: headers() });
+        const data = await r.json();
+        this.projects = data.projects || [];
+      } catch (e) {
+        this.toast('Failed to load projects', 'error');
+      }
+      this.projectsLoading = false;
+    },
+
+    async toggleProject(pid) {
+      if (this.expandedProject === pid) {
+        this.expandedProject = '';
+        return;
+      }
+      this.expandedProject = pid;
+      this.projectDocs = [];
+      this.projectTypeFilter = '';
+      this.projectDocsLoading = true;
+      try {
+        const r = await fetch('/docs?project_id=' + encodeURIComponent(pid), { headers: headers() });
+        const data = await r.json();
+        this.projectDocs = data.documents || [];
+      } catch (e) {
+        this.toast('Failed to load project docs', 'error');
+      }
+      this.projectDocsLoading = false;
+    },
+
+    async viewDoc(docId) {
+      try {
+        const r = await fetch('/docs/' + docId, { headers: headers() });
+        const data = await r.json();
+        this.viewModal = {
+          show: true,
+          id: data.id,
+          title: data.title || 'Untitled',
+          content: data.text || '(empty)',
+          category: data.category || '',
+          type: data.type || '',
+          synced_at: data.synced_at || '',
+        };
+      } catch (e) {
+        this.toast('Failed to load document', 'error');
+      }
+    },
+
+    promptDelete(id, title) {
+      this.deleteModal = { show: true, id, title };
+    },
+
+    async confirmDelete() {
+      const id = this.deleteModal.id;
+      this.deleteModal.show = false;
+      try {
+        await fetch('/docs/' + id, { method: 'DELETE', headers: headers() });
+        this.docs = this.docs.filter(d => d.id !== id);
+        this.toast('Document deleted');
+      } catch (e) {
+        this.toast('Failed to delete', 'error');
+      }
+    },
+
+    async submitUpload() {
+      if (!this.upload.title || !this.upload.content) {
+        this.toast('Title and content are required', 'error');
+        return;
+      }
+      this.uploading = true;
+      try {
+        const r = await fetch('/docs', {
+          method: 'POST',
+          headers: headers(),
+          body: JSON.stringify({
+            project_id: '_global',
+            type: 'company_doc',
+            title: this.upload.title,
+            content: this.upload.content,
+            category: this.upload.category,
+            priority: parseInt(this.upload.priority),
+          }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.detail || 'Upload failed');
+        this.toast('Uploaded! ' + (data.chunks_created || 0) + ' chunks created');
+        this.upload = { title: '', content: '', category: 'general', priority: 3 };
+        await this.loadDocs();
+      } catch (e) {
+        this.toast(e.message || 'Upload failed', 'error');
+      }
+      this.uploading = false;
+    },
+
+    // Bulk upload
+    handleFileSelect(event) {
+      this.bulkFiles = [...this.bulkFiles, ...Array.from(event.target.files)];
+      event.target.value = '';
+    },
+
+    handleFileDrop(event) {
+      event.currentTarget.classList.remove('dragover');
+      const files = Array.from(event.dataTransfer.files).filter(f => f.name.endsWith('.md') || f.name.endsWith('.txt'));
+      this.bulkFiles = [...this.bulkFiles, ...files];
+    },
+
+    async submitBulkUpload() {
+      if (this.bulkFiles.length === 0) return;
+      this.bulkUploading = true;
+      this.bulkProgress = 0;
+      this.bulkResults = [];
+
+      for (const file of this.bulkFiles) {
+        this.bulkProgress++;
+        const content = await file.text();
+        const title = file.name.replace(/\.(md|txt)$/i, '').replace(/[-_]/g, ' ');
+        try {
+          const r = await fetch('/docs', {
+            method: 'POST',
+            headers: headers(),
+            body: JSON.stringify({
+              project_id: '_global',
+              type: 'company_doc',
+              title: title,
+              content: content,
+              category: this.bulkCategory,
+            }),
+          });
+          const data = await r.json();
+          if (!r.ok) throw new Error(data.detail || 'Failed');
+          this.bulkResults.push({ title, chunks: data.chunks_created || 0, error: null });
+        } catch (e) {
+          this.bulkResults.push({ title, chunks: 0, error: e.message });
+        }
+      }
+
+      this.bulkUploading = false;
+      this.bulkFiles = [];
+      const total = this.bulkResults.reduce((s, r) => s + (r.chunks || 0), 0);
+      this.toast('Bulk upload complete! ' + total + ' total chunks');
+      await this.loadDocs();
+    },
+
+    // Helpers
+    toast(message, type = 'success') {
+      this.toasts.push({ message, type });
+      setTimeout(() => this.toasts.shift(), 3000);
+    },
+
+    formatDate(iso) {
+      if (!iso) return '—';
+      const d = new Date(iso);
+      return d.toLocaleDateString('el-GR') + ' ' + d.toLocaleTimeString('el-GR', { hour: '2-digit', minute: '2-digit' });
+    },
+
+    formatSize(bytes) {
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+      return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    },
+  };
+}
+</script>
+</body>
+</html>
