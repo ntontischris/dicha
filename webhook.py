@@ -65,6 +65,8 @@ app = FastAPI(
     title="WooCommerce Sync Webhook",
     version="2.0.0",
     lifespan=lifespan,
+    docs_url="/api-docs",
+    redoc_url=None,
 )
 
 # CORS for WP Admin AJAX calls
