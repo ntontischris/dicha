@@ -474,6 +474,76 @@ async def delete_single_doc(
     return {"status": "ok", "deleted_id": doc_id}
 
 
+@app.post("/api/re-ingest")
+async def re_ingest_docs(
+    project_id: str = Query(default="_global"),
+    x_webhook_secret: str = Header(default=""),
+    authorization: str = Header(default=""),
+):
+    """Re-ingest existing docs with parent-child structure.
+
+    Reads flat docs from the database, deletes them, and re-processes
+    through the full pipeline (chunk → context → embed → parent-child upsert).
+    """
+    _verify_secret(x_webhook_secret, authorization)
+
+    http = app.state.http_client
+    openai = app.state.openai_client
+
+    # 1. Fetch existing docs (only parents or flat docs, not child chunks)
+    url = f"{config.SUPABASE_URL}/rest/v1/documents"
+    params = (
+        f"project_id=eq.{project_id}"
+        f"&is_parent=eq.false"  # flat docs have is_parent=false (default)
+        f"&parent_id=is.null"   # and no parent_id (not already a child)
+        f"&select=id,title,text,type,category,subcategory,scope,is_active,priority"
+        f"&order=id.asc&limit=500"
+    )
+    headers = {
+        "apikey": config.SUPABASE_KEY,
+        "Authorization": f"Bearer {config.SUPABASE_KEY}",
+    }
+    r = await http.get(f"{url}?{params}", headers=headers)
+    r.raise_for_status()
+    existing_docs = r.json()
+
+    if not existing_docs:
+        return {"status": "ok", "message": "No flat docs found to re-ingest", "count": 0}
+
+    # 2. Convert to DocPayload objects
+    doc_payloads: list[DocPayload] = []
+    for doc in existing_docs:
+        doc_payloads.append(DocPayload(
+            title=doc["title"],
+            content=doc["text"],
+            type=doc.get("type", "company_doc"),
+            project_id=project_id,
+            category=doc.get("category", "general"),
+            subcategory=doc.get("subcategory", ""),
+            priority=doc.get("priority", 3),
+            tags=[],
+        ))
+
+    # 3. Delete old flat docs
+    del_url = f"{config.SUPABASE_URL}/rest/v1/documents?project_id=eq.{project_id}&parent_id=is.null&is_parent=eq.false"
+    doc_types = set(d.get("type", "") for d in existing_docs)
+    if doc_types:
+        type_filter = ",".join(doc_types)
+        del_url += f"&type=in.({type_filter})"
+    await http.delete(del_url, headers=headers)
+
+    # 4. Re-ingest with parent-child pipeline
+    count = await sync_docs(http, openai, doc_payloads)
+
+    logger.info("Re-ingested %d docs → %d rows for project=%s", len(doc_payloads), count, project_id)
+    return {
+        "status": "ok",
+        "project_id": project_id,
+        "docs_found": len(doc_payloads),
+        "rows_created": count,
+    }
+
+
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_dashboard():
     """Serve the admin dashboard SPA."""

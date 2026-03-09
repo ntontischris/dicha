@@ -37,14 +37,30 @@ _HEADERS = {
 
 # -- Build raw chunks from webhook payload ----------------------------
 
-def _build_code_chunks(payload: WebhookPayload) -> list[dict]:
+def _build_code_chunks(payload: WebhookPayload) -> tuple[list[dict], list[dict]]:
     """Extract text chunks from webhook payload code data.
 
-    Returns list of dicts with: project_id, type, source_id, title, text,
-    full_text (for contextual retrieval), metadata, is_active.
+    Returns:
+        (chunks, parent_infos) — chunks have parent_source_id for linking,
+        parent_infos have data needed to build parent rows.
     """
     pid = payload.project_id
     chunks: list[dict] = []
+    parent_infos: list[dict] = []
+    _seen_parents: set[str] = set()
+
+    def _register_parent(source_id: str, title: str, full_text: str,
+                         doc_type: str, is_active: bool = True) -> None:
+        if source_id in _seen_parents:
+            return
+        _seen_parents.add(source_id)
+        parent_infos.append({
+            "source_id": source_id,
+            "title": title,
+            "text": truncate_text(full_text),
+            "type": doc_type,
+            "is_active": is_active,
+        })
 
     # -- Code snippets -------------------------------------------------
     for snippet in payload.data.code_snippets:
@@ -62,16 +78,22 @@ def _build_code_chunks(payload: WebhookPayload) -> list[dict]:
         meta_text = "\n".join(line for line in meta_lines if line)
         full_text = f"{meta_text}\n\n--- CODE ---\n{snippet.code}"
 
+        parent_sid = f"snippet-{snippet.source}-{snippet.id}-parent"
+        _register_parent(parent_sid, snippet.name or "Untitled Snippet",
+                         full_text, "code_snippet", snippet.active)
+
         chunks.append({
             "project_id": pid,
             "type": "code_snippet",
             "source_id": f"snippet-{snippet.source}-{snippet.id}",
+            "parent_source_id": parent_sid,
             "title": snippet.name or "Untitled Snippet",
             "text": truncate_text(full_text),
             "full_text": full_text,
             "is_active": snippet.active,
             "tags": snippet.tags,
             "raw_code": snippet.code,
+            "chunk_index": 0,
         })
 
     # -- functions.php -------------------------------------------------
@@ -80,24 +102,34 @@ def _build_code_chunks(payload: WebhookPayload) -> list[dict]:
         full_code = funcs_php.child_theme.code
         php_chunks = split_php_functions(full_code)
 
+        parent_sid = "functions-php-child-parent"
+        _register_parent(parent_sid, "functions.php (child theme)",
+                         full_code, "functions_php")
+
         for chunk in php_chunks:
             text = f"File: functions.php (child theme)\nFunction: {chunk.name}\n\n--- CODE ---\n{chunk.text}"
             chunks.append({
                 "project_id": pid,
                 "type": "functions_php",
                 "source_id": f"functions-php-child-{chunk.index}",
+                "parent_source_id": parent_sid,
                 "title": f"functions.php: {chunk.name}",
                 "text": truncate_text(text),
                 "full_text": full_code[:8000],
                 "is_active": True,
                 "tags": "",
                 "raw_code": chunk.text,
+                "chunk_index": chunk.index,
             })
 
     # -- Theme files ---------------------------------------------------
     for theme_file in payload.data.theme_files:
         if not theme_file.code or len(theme_file.code.strip()) < 10:
             continue
+
+        parent_sid = f"theme-{theme_file.path}-parent"
+        _register_parent(parent_sid, theme_file.path,
+                         theme_file.code, "theme_file")
 
         file_chunks = split_by_size(theme_file.code, 2000)
 
@@ -110,16 +142,19 @@ def _build_code_chunks(payload: WebhookPayload) -> list[dict]:
                 "project_id": pid,
                 "type": "theme_file",
                 "source_id": f"theme-{theme_file.path}-{i}",
+                "parent_source_id": parent_sid,
                 "title": title,
                 "text": truncate_text(text),
                 "full_text": theme_file.code[:8000],
                 "is_active": True,
                 "tags": "",
                 "raw_code": chunk_text,
+                "chunk_index": i,
             })
 
     # Filter invalid chunks
-    return [c for c in chunks if is_valid_chunk(c["text"])]
+    valid_chunks = [c for c in chunks if is_valid_chunk(c["text"])]
+    return valid_chunks, parent_infos
 
 
 def _build_doc_chunks(doc: DocPayload) -> list[dict]:
@@ -370,6 +405,35 @@ def _build_child_rows(
 
 # -- Main orchestrators -----------------------------------------------
 
+def _build_code_parent_row(
+    parent_info: dict, project_id: str, now: str,
+) -> dict:
+    """Build a parent row for code data (full text, no embedding)."""
+    return {
+        "project_id": project_id,
+        "scope": "project",
+        "type": parent_info["type"],
+        "source_id": parent_info["source_id"],
+        "title": parent_info["title"],
+        "text": parent_info["text"],
+        "embedding": None,
+        "metadata": json.dumps({"is_parent": True}),
+        "category": "",
+        "subcategory": "",
+        "language": "",
+        "hooks": [],
+        "keywords": [],
+        "is_active": parent_info.get("is_active", True),
+        "priority": 3,
+        "context_text": "",
+        "section_path": "",
+        "is_parent": True,
+        "parent_id": None,
+        "chunk_index": 0,
+        "synced_at": now,
+    }
+
+
 async def sync_vector_data(
     http_client: httpx.AsyncClient,
     openai_client: AsyncOpenAI,
@@ -377,22 +441,31 @@ async def sync_vector_data(
 ) -> int:
     """Full vector sync pipeline for webhook data.
 
-    1. Build chunks from code
-    2. Extract metadata (hooks, functions, category)
-    3. Generate contextual retrieval summaries
-    4. Embed enriched text
-    5. Upsert to documents table
+    Two-pass parent-child approach (same as sync_docs):
+      Pass 1: Upsert parent rows (full code, no embedding) → get DB IDs
+      Pass 2: Upsert child rows (chunks with embeddings) → linked to parents
 
-    Returns number of documents upserted.
+    Returns number of documents upserted (parents + children).
     """
-    chunks = _build_code_chunks(payload)
+    chunks, parent_infos = _build_code_chunks(payload)
     if not chunks:
         logger.info("No code chunks to embed for %s", payload.project_id)
         return 0
 
-    logger.info("Built %d code chunks for %s", len(chunks), payload.project_id)
+    logger.info("Built %d code chunks + %d parents for %s",
+                len(chunks), len(parent_infos), payload.project_id)
 
-    # Extract metadata
+    now = datetime.now(timezone.utc).isoformat()
+
+    # -- Pass 1: Build and upsert parent rows ----------------------------
+    parent_rows = [
+        _build_code_parent_row(p, payload.project_id, now)
+        for p in parent_infos
+    ]
+    parent_id_map = await _upsert_parents_returning_ids(http_client, parent_rows)
+    logger.info("Pass 1 done: %d code parent rows upserted", len(parent_id_map))
+
+    # -- Extract metadata ------------------------------------------------
     metas = [
         extract_metadata(
             code=c.get("raw_code", c["text"]),
@@ -402,7 +475,7 @@ async def sync_vector_data(
         for c in chunks
     ]
 
-    # Contextual retrieval
+    # -- Contextual retrieval --------------------------------------------
     full_texts = {c["source_id"]: c["full_text"] for c in chunks}
     contexts = await generate_contexts_batch(
         client=openai_client,
@@ -411,20 +484,24 @@ async def sync_vector_data(
         concurrency=10,
     )
 
-    # Enrich and embed
+    # -- Enrich and embed ------------------------------------------------
     enriched_texts = [
         _enrich_text(chunks[i], metas[i], contexts[i])
         for i in range(len(chunks))
     ]
     embeddings = await _batch_embed(openai_client, enriched_texts)
 
-    # Build rows and upsert (flat — no parent-child for code)
-    now = datetime.now(timezone.utc).isoformat()
-    rows = _build_child_rows(chunks, metas, contexts, embeddings, now)
+    # -- Pass 2: Build and upsert child rows (linked to parents) ---------
+    rows = _build_child_rows(
+        chunks, metas, contexts, embeddings, now,
+        parent_id_map=parent_id_map,
+    )
     await _upsert_documents(http_client, rows)
 
-    logger.info("Vector sync done: %d documents for %s", len(rows), payload.project_id)
-    return len(rows)
+    total = len(parent_rows) + len(rows)
+    logger.info("Vector sync done: %d parents + %d children = %d total for %s",
+                len(parent_rows), len(rows), total, payload.project_id)
+    return total
 
 
 async def sync_docs(
