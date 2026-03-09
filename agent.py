@@ -62,14 +62,18 @@ def _trim_messages(messages: list[dict], model: str) -> None:
 
 # ── Tool execution ────────────────────────────────────────────────────────────
 
-def _execute_tool(tc) -> tuple[str, str, dict, str]:
+def _execute_tool(tc, project_id: str) -> tuple[str, str, dict, str]:
     """Execute a single tool call. Runs in thread pool."""
+    config.set_project_id(project_id)
     try:
-        arguments = json.loads(tc.function.arguments)
-    except json.JSONDecodeError:
-        arguments = {}
-    result = call_tool(tc.function.name, arguments)
-    return tc.id, tc.function.name, arguments, result
+        try:
+            arguments = json.loads(tc.function.arguments)
+        except json.JSONDecodeError:
+            arguments = {}
+        result = call_tool(tc.function.name, arguments)
+        return tc.id, tc.function.name, arguments, result
+    finally:
+        config.clear_project_id()
 
 
 # ── Agent loop (generator — yields str chunks) ────────────────────────────────
@@ -114,9 +118,10 @@ def run_agent(messages: list[dict], usage: dict | None = None) -> Iterator[str]:
         messages.append(message.model_dump(exclude_unset=True))
 
         # Execute all requested tools in parallel (preserve original order in results)
+        current_project = config.get_project_id()
         tool_results: dict[str, tuple[str, dict, str]] = {}
         with ThreadPoolExecutor(max_workers=len(message.tool_calls)) as pool:
-            futures = {pool.submit(_execute_tool, tc): tc for tc in message.tool_calls}
+            futures = {pool.submit(_execute_tool, tc, current_project): tc for tc in message.tool_calls}
             for future in as_completed(futures):
                 tc_id, name, args, result = future.result()
                 tool_results[tc_id] = (name, args, result)
