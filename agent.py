@@ -63,14 +63,26 @@ def _trim_messages(messages: list[dict], model: str) -> None:
 # ── Tool execution ────────────────────────────────────────────────────────────
 
 def _execute_tool(tc, project_id: str) -> tuple[str, str, dict, str]:
-    """Execute a single tool call. Runs in thread pool."""
+    """Execute a single tool call with one retry on error. Runs in thread pool."""
     config.set_project_id(project_id)
     try:
         try:
             arguments = json.loads(tc.function.arguments)
         except json.JSONDecodeError:
             arguments = {}
+
         result = call_tool(tc.function.name, arguments)
+
+        # Retry once on transient errors (network, timeout)
+        if isinstance(result, str) and result.startswith("ERROR"):
+            import time
+            time.sleep(1)
+            retry_result = call_tool(tc.function.name, arguments)
+            if not (isinstance(retry_result, str) and retry_result.startswith("ERROR")):
+                return tc.id, tc.function.name, arguments, retry_result
+            # Both failed — return error with warning for the agent
+            result = f"{retry_result}\n\n⚠️ Tool failed after retry. Do NOT guess — inform the user about the retrieval error."
+
         return tc.id, tc.function.name, arguments, result
     finally:
         config.clear_project_id()

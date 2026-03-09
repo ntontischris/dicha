@@ -64,20 +64,26 @@ async def generate_context_for_chunk(
         chunk_text=chunk_text[:2000],
     )
 
-    try:
-        response = await client.chat.completions.create(
-            model=config.CONTEXT_MODEL,
-            messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": user_msg},
-            ],
-            max_tokens=200,
-            temperature=0,
-        )
-        return response.choices[0].message.content or ""
-    except Exception as e:
-        logger.warning("Context generation failed for '%s': %s", title, e)
-        return ""
+    for attempt in range(2):
+        try:
+            response = await client.chat.completions.create(
+                model=config.CONTEXT_MODEL,
+                messages=[
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {"role": "user", "content": user_msg},
+                ],
+                max_tokens=200,
+                temperature=0,
+            )
+            return response.choices[0].message.content or ""
+        except Exception as e:
+            if attempt == 0:
+                logger.warning("Context generation failed for '%s', retrying: %s", title, e)
+                await asyncio.sleep(1)
+            else:
+                logger.error("Context generation failed permanently for '%s': %s", title, e)
+                return ""
+    return ""
 
 
 async def generate_contexts_batch(

@@ -123,8 +123,12 @@ def _build_code_chunks(payload: WebhookPayload) -> list[dict]:
 
 
 def _build_doc_chunks(doc: DocPayload) -> list[dict]:
-    """Build chunks from a single document (company or project doc)."""
+    """Build chunks from a single document (company or project doc).
+
+    Each chunk includes a parent_source_id for parent-child linking.
+    """
     scope = "global" if doc.project_id == "_global" else "project"
+    parent_source_id = f"doc-{doc.title[:50]}-parent"
 
     # Split by markdown headings (or size fallback)
     md_chunks = split_markdown(doc.content, max_chars=2000)
@@ -139,6 +143,7 @@ def _build_doc_chunks(doc: DocPayload) -> list[dict]:
             "project_id": doc.project_id,
             "type": doc.type,
             "source_id": f"doc-{doc.title[:50]}-{chunk.index}",
+            "parent_source_id": parent_source_id,
             "title": f"{doc.title}: {chunk.name}" if chunk.total > 1 else doc.title,
             "text": text,
             "full_text": doc.content[:8000],
@@ -149,6 +154,7 @@ def _build_doc_chunks(doc: DocPayload) -> list[dict]:
             "category": doc.category,
             "subcategory": doc.subcategory,
             "priority": doc.priority,
+            "chunk_index": chunk.index,
         })
 
     return chunks
@@ -216,6 +222,74 @@ async def _batch_embed(
     return all_embeddings
 
 
+# -- Parent row builder -----------------------------------------------
+
+def _build_parent_row(doc: DocPayload, now: str) -> dict:
+    """Build a parent document row (full text, no embedding, is_parent=true).
+
+    The parent stores the complete document text. When a child chunk matches
+    in hybrid_search, the SQL function expands to return the parent's text,
+    giving the agent full context.
+    """
+    scope = "global" if doc.project_id == "_global" else "project"
+    return {
+        "project_id": doc.project_id,
+        "scope": scope,
+        "type": doc.type,
+        "source_id": f"doc-{doc.title[:50]}-parent",
+        "title": doc.title,
+        "text": truncate_text(doc.content),
+        "embedding": None,
+        "metadata": json.dumps({"is_parent": True}),
+        "category": doc.category,
+        "subcategory": doc.subcategory,
+        "language": "",
+        "hooks": [],
+        "keywords": [],
+        "is_active": True,
+        "priority": doc.priority,
+        "context_text": "",
+        "section_path": "",
+        "is_parent": True,
+        "parent_id": None,
+        "chunk_index": 0,
+        "synced_at": now,
+    }
+
+
+# -- Upsert with ID return -------------------------------------------
+
+_RETURNING_HEADERS = {
+    "apikey": config.SUPABASE_KEY,
+    "Authorization": f"Bearer {config.SUPABASE_KEY}",
+    "Content-Type": "application/json",
+    "Prefer": "return=representation,resolution=merge-duplicates",
+}
+
+
+async def _upsert_parents_returning_ids(
+    client: httpx.AsyncClient,
+    rows: list[dict],
+) -> dict[str, int]:
+    """Upsert parent rows and return a mapping of source_id → DB id.
+
+    Uses Prefer: return=representation to get inserted/upserted rows back.
+    """
+    if not rows:
+        return {}
+
+    url = f"{config.SUPABASE_URL}/rest/v1/documents?select=id,source_id"
+    r = await client.post(url, headers=_RETURNING_HEADERS, json=rows)
+    if r.status_code >= 400:
+        logger.error("Parent upsert failed %d: %s", r.status_code, r.text[:500])
+    r.raise_for_status()
+
+    result = r.json()
+    id_map = {row["source_id"]: row["id"] for row in result}
+    logger.info("Upserted %d parent docs, got %d IDs back", len(rows), len(id_map))
+    return id_map
+
+
 # -- Upsert documents -------------------------------------------------
 
 async def _upsert_documents(
@@ -237,29 +311,28 @@ async def _upsert_documents(
 
 # -- Parent-child handling --------------------------------------------
 
-def _build_parent_child_rows(
+def _build_child_rows(
     chunks: list[dict],
     metas: list[ExtractedMeta],
     contexts: list[str],
     embeddings: list[list[float]],
     now: str,
+    parent_id_map: dict[str, int] | None = None,
 ) -> list[dict]:
-    """Build document rows with parent-child relationships.
+    """Build child document rows with embeddings.
 
-    For small chunks (<500 chars): single row (no parent/child split).
-    For large chunks: parent row (full text, no embedding) + child row (embedded).
-
-    Since we need parent IDs from DB, we use a two-pass approach:
-    - Pass 1: All rows as flat documents (parent_id=NULL, is_parent=false)
-    - Parent expansion happens at query time via the SQL function.
-
-    This is simpler and avoids needing DB round-trips during ingestion.
+    When parent_id_map is provided, links each child to its parent row
+    via the parent_source_id field in the chunk dict.
     """
     rows: list[dict] = []
 
     for i, chunk in enumerate(chunks):
         meta = metas[i]
-        enriched = _enrich_text(chunk, meta, contexts[i])
+
+        # Resolve parent_id from map
+        parent_id = None
+        if parent_id_map and chunk.get("parent_source_id"):
+            parent_id = parent_id_map.get(chunk["parent_source_id"])
 
         row = {
             "project_id": chunk["project_id"],
@@ -286,8 +359,8 @@ def _build_parent_child_rows(
             "context_text": contexts[i],
             "section_path": chunk.get("section_path", ""),
             "is_parent": False,
-            "parent_id": None,
-            "chunk_index": 0,
+            "parent_id": parent_id,
+            "chunk_index": chunk.get("chunk_index", 0),
             "synced_at": now,
         }
         rows.append(row)
@@ -345,9 +418,9 @@ async def sync_vector_data(
     ]
     embeddings = await _batch_embed(openai_client, enriched_texts)
 
-    # Build rows and upsert
+    # Build rows and upsert (flat — no parent-child for code)
     now = datetime.now(timezone.utc).isoformat()
-    rows = _build_parent_child_rows(chunks, metas, contexts, embeddings, now)
+    rows = _build_child_rows(chunks, metas, contexts, embeddings, now)
     await _upsert_documents(http_client, rows)
 
     logger.info("Vector sync done: %d documents for %s", len(rows), payload.project_id)
@@ -361,16 +434,31 @@ async def sync_docs(
 ) -> int:
     """Vector sync pipeline for document uploads (company/project docs).
 
-    Same pipeline as code sync but with markdown chunking.
-    Returns number of documents upserted.
+    Two-pass parent-child approach:
+      Pass 1: Upsert parent rows (full doc text, no embedding) → get DB IDs
+      Pass 2: Upsert child rows (chunks with embeddings) → linked to parents
+
+    When the agent searches, child chunks match via embedding/FTS.
+    The SQL hybrid_search expands matched children to return the parent's
+    full document text — giving the agent complete context, not just fragments.
+
+    Returns total number of documents upserted (parents + children).
     """
+    now = datetime.now(timezone.utc).isoformat()
+
+    # -- Pass 1: Build and upsert parent rows ----------------------------
+    parent_rows = [_build_parent_row(doc, now) for doc in docs]
+    parent_id_map = await _upsert_parents_returning_ids(http_client, parent_rows)
+    logger.info("Pass 1 done: %d parent docs upserted", len(parent_id_map))
+
+    # -- Build child chunks ----------------------------------------------
     all_chunks: list[dict] = []
     for doc in docs:
         all_chunks.extend(_build_doc_chunks(doc))
 
     if not all_chunks:
         logger.info("No doc chunks to embed")
-        return 0
+        return len(parent_rows)
 
     logger.info("Built %d doc chunks from %d documents", len(all_chunks), len(docs))
 
@@ -407,10 +495,13 @@ async def sync_docs(
     ]
     embeddings = await _batch_embed(openai_client, enriched_texts)
 
-    # Upsert
-    now = datetime.now(timezone.utc).isoformat()
-    rows = _build_parent_child_rows(all_chunks, metas, contexts, embeddings, now)
+    # -- Pass 2: Build and upsert child rows (linked to parents) ---------
+    rows = _build_child_rows(
+        all_chunks, metas, contexts, embeddings, now,
+        parent_id_map=parent_id_map,
+    )
     await _upsert_documents(http_client, rows)
 
-    logger.info("Doc sync done: %d documents upserted", len(rows))
-    return len(rows)
+    total = len(parent_rows) + len(rows)
+    logger.info("Doc sync done: %d parents + %d children = %d total", len(parent_rows), len(rows), total)
+    return total

@@ -63,11 +63,21 @@ def _rpc(function_name: str, payload: dict) -> dict | list:
         return {"error": str(e)}
 
 
-def _embed_query(query: str) -> list[float]:
-    """Embed a search query."""
+def _embed_query(query: str, category: str = "") -> list[float]:
+    """Embed a search query with enrichment to match document embeddings.
+
+    Documents are embedded as '[category] [type] CONTEXT: ... Title: ... CONTENT: ...'
+    so queries need similar structure for better cosine similarity alignment.
+    """
+    parts = []
+    if category:
+        parts.append(f"[{category}]")
+    parts.append(f"QUERY: {query}")
+    enriched = " ".join(parts)
+
     response = _openai.embeddings.create(
         model=config.EMBEDDING_MODEL,
-        input=query,
+        input=enriched,
         dimensions=1536,
     )
     return response.data[0].embedding
@@ -78,6 +88,7 @@ def _embed_query(query: str) -> list[float]:
 def _rerank(query: str, documents: list[dict], top_n: int = 5) -> list[dict]:
     """Rerank documents using Cohere cross-encoder.
 
+    Includes hooks, category, and context_text for richer signal.
     Falls back to original order if Cohere unavailable.
     """
     if not _cohere_client or not documents:
@@ -85,7 +96,10 @@ def _rerank(query: str, documents: list[dict], top_n: int = 5) -> list[dict]:
 
     try:
         texts = [
-            f"{d.get('title', '')}\n{d.get('body', '')}"
+            f"[{d.get('category', '')}] {d.get('title', '')}\n"
+            f"Hooks: {', '.join(d.get('hooks', []))}\n"
+            f"Context: {d.get('context_text', '')}\n"
+            f"{d.get('body', '')}"
             for d in documents
         ]
         result = _cohere_client.rerank(
@@ -112,7 +126,7 @@ def search_code(query: str, category: str = "") -> str:
     Optional category filter narrows results.
     """
     try:
-        embedding = _embed_query(query)
+        embedding = _embed_query(query, category)
     except Exception as e:
         return f"ERROR generating embedding: {e}"
 
@@ -148,7 +162,7 @@ def search_docs(query: str, category: str = "") -> str:
     Searches global docs + current project docs combined.
     """
     try:
-        embedding = _embed_query(query)
+        embedding = _embed_query(query, category)
     except Exception as e:
         return f"ERROR generating embedding: {e}"
 
