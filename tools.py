@@ -136,7 +136,7 @@ def search_code(query: str, category: str = "") -> str:
     payload: dict = {
         "query_text": query,
         "query_embedding": embedding,
-        "match_count": 20,
+        "match_count": 30,
         "p_project_id": config.get_project_id(),
 
         "p_doc_types": _CODE_DOC_TYPES,
@@ -151,7 +151,7 @@ def search_code(query: str, category: str = "") -> str:
         return "No code results found. RETRY: try without category filter, or use different English search terms/synonyms."
 
     # Rerank
-    reranked = _rerank(query, result, top_n=5)
+    reranked = _rerank(query, result, top_n=8)
 
     return _format_results(reranked)
 
@@ -171,7 +171,7 @@ def search_docs(query: str, category: str = "") -> str:
     payload: dict = {
         "query_text": query,
         "query_embedding": embedding,
-        "match_count": 20,
+        "match_count": 30,
         "p_project_id": config.get_project_id(),
 
         "p_doc_types": _DOCS_DOC_TYPES,
@@ -186,7 +186,7 @@ def search_docs(query: str, category: str = "") -> str:
         return "No documentation found. RETRY: try without category filter, use synonyms, or broaden the English search terms."
 
     # Rerank
-    reranked = _rerank(query, result, top_n=5)
+    reranked = _rerank(query, result, top_n=8)
 
     return _format_results(reranked)
 
