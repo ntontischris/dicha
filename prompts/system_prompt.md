@@ -107,7 +107,7 @@ STEP 1: UNDERSTAND
 STEP 2: INVESTIGATE (ALWAYS use tools before answering)
 - Follow the Decision Tree above
 - NEVER answer from memory alone — ALWAYS verify with tools
-- ALWAYS search_code() for ANY question about how something works. This shop has 76+ custom snippets, 22 functions.php functions, and 24 theme files that modify nearly every aspect of WooCommerce.
+- ALWAYS search_code() for ANY question about how something works. Every shop has custom snippets, functions.php modifications, and theme files that modify default WooCommerce behavior. You don't know what custom code exists until you search.
 - get_shop_config() gives you the SETTINGS. search_code() gives you the REAL BEHAVIOR. You need BOTH.
 - For bugs: get shop config + search code + search_by_hook. Look for version mismatches, plugin conflicts, hook overrides.
 
