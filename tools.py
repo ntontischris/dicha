@@ -63,7 +63,7 @@ def _rpc(function_name: str, payload: dict) -> dict | list:
         return {"error": str(e)}
 
 
-def _embed_query(query: str, category: str = "") -> list[float]:
+def _embed_query(query: str, category: str = "", doc_types: list[str] | None = None) -> list[float]:
     """Embed a search query with enrichment to match document embeddings.
 
     Documents are embedded as '[category] [type] CONTEXT: ... Title: ... CONTENT: ...'
@@ -72,6 +72,8 @@ def _embed_query(query: str, category: str = "") -> list[float]:
     parts = []
     if category:
         parts.append(f"[{category}]")
+    if doc_types and len(doc_types) == 1:
+        parts.append(f"[{doc_types[0]}]")
     parts.append(f"QUERY: {query}")
     enriched = " ".join(parts)
 
@@ -96,7 +98,8 @@ def _rerank(query: str, documents: list[dict], top_n: int = 5) -> list[dict]:
 
     try:
         texts = [
-            f"[{d.get('category', '')}] {d.get('title', '')}\n"
+            f"[{d.get('scope', 'project')}] [{d.get('category', '')}] {d.get('title', '')}\n"
+            f"Section: {d.get('section_path', '')}\n"
             f"Hooks: {', '.join(d.get('hooks', []))}\n"
             f"Context: {d.get('context_text', '')}\n"
             f"{d.get('body', '')}"
@@ -126,7 +129,7 @@ def search_code(query: str, category: str = "") -> str:
     Optional category filter narrows results.
     """
     try:
-        embedding = _embed_query(query, category)
+        embedding = _embed_query(query, category, doc_types=_CODE_DOC_TYPES)
     except Exception as e:
         return f"ERROR generating embedding: {e}"
 
@@ -162,7 +165,7 @@ def search_docs(query: str, category: str = "") -> str:
     Searches global docs + current project docs combined.
     """
     try:
-        embedding = _embed_query(query, category)
+        embedding = _embed_query(query, category, doc_types=_DOCS_DOC_TYPES)
     except Exception as e:
         return f"ERROR generating embedding: {e}"
 
@@ -252,6 +255,9 @@ def get_shop_config() -> str:
 def _format_config(data: dict) -> str:
     """Format project context as readable text."""
     project = data.get("project") or {}
+    if not project:
+        return "No shop data synced yet. Run a sync from the WP plugin first."
+
     parts = [
         f"=== Store Info ===",
         f"Site: {project.get('site_url')}",
@@ -260,10 +266,6 @@ def _format_config(data: dict) -> str:
         f"Active plugins: {project.get('active_plugins_count')}",
         f"Last sync: {project.get('last_sync')}",
     ]
-
-    if not project:
-        parts.append("\nNo shop data synced yet. Run a sync from the WP plugin first.")
-        return "\n".join(parts)
 
     # Payment gateways (enabled only)
     gateways = [g for g in (data.get("payment_gateways") or []) if g.get("enabled")]

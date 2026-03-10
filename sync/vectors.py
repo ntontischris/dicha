@@ -5,8 +5,10 @@ Handles both webhook code sync and doc ingestion.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import re
 from datetime import datetime, timezone
 
 import httpx
@@ -26,6 +28,15 @@ from sync.extraction import ExtractedMeta, extract_metadata
 from sync.models import DocPayload, WebhookPayload
 
 logger = logging.getLogger(__name__)
+
+
+def _doc_source_id(title: str, project_id: str, doc_type: str) -> str:
+    """Generate a hash-based source_id for docs to avoid title collisions."""
+    key = f"{project_id}:{doc_type}:{title}"
+    h = hashlib.sha256(key.encode()).hexdigest()[:16]
+    label = re.sub(r'[^a-zA-Z0-9]', '_', title[:30])
+    return f"doc-{label}-{h}"
+
 
 _HEADERS = {
     "apikey": config.SUPABASE_KEY,
@@ -163,7 +174,7 @@ def _build_doc_chunks(doc: DocPayload) -> list[dict]:
     Each chunk includes a parent_source_id for parent-child linking.
     """
     scope = "global" if doc.project_id == "_global" else "project"
-    parent_source_id = f"doc-{doc.title[:50]}-parent"
+    parent_source_id = _doc_source_id(doc.title, doc.project_id, doc.type)
 
     # Split by markdown headings (or size fallback)
     md_chunks = split_markdown(doc.content, max_chars=2000)
@@ -177,7 +188,7 @@ def _build_doc_chunks(doc: DocPayload) -> list[dict]:
         chunks.append({
             "project_id": doc.project_id,
             "type": doc.type,
-            "source_id": f"doc-{doc.title[:50]}-{chunk.index}",
+            "source_id": f"{parent_source_id}-{chunk.index}",
             "parent_source_id": parent_source_id,
             "title": f"{doc.title}: {chunk.name}" if chunk.total > 1 else doc.title,
             "text": text,
@@ -271,7 +282,7 @@ def _build_parent_row(doc: DocPayload, now: str) -> dict:
         "project_id": doc.project_id,
         "scope": scope,
         "type": doc.type,
-        "source_id": f"doc-{doc.title[:50]}-parent",
+        "source_id": _doc_source_id(doc.title, doc.project_id, doc.type),
         "title": doc.title,
         "text": truncate_text(doc.content),
         "embedding": None,

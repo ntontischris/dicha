@@ -51,13 +51,30 @@ def _count_tokens(messages: list[dict], model: str) -> int:
 
 
 def _trim_messages(messages: list[dict], model: str) -> None:
-    """Drop oldest non-system turns until we're within the context limit."""
+    """Drop oldest non-system turns in logical groups until within context limit.
+
+    A logical group is: user message + assistant response (with tool calls) + all tool results.
+    Dropping partial groups would leave orphaned tool results that confuse the model.
+    """
     limit = _CONTEXT_LIMITS.get(model, 120_000) - _RESPONSE_BUFFER
     while _count_tokens(messages, model) > limit and len(messages) > 2:
-        messages.pop(1)  # oldest non-system turn
-        # Also drop the next message if it's a dangling assistant/tool turn
-        if len(messages) > 1 and messages[1].get("role") in ("assistant", "tool"):
+        # Find the end of the first complete turn (after system message at index 0)
+        i = 1
+        # Skip user message
+        if i < len(messages) and messages[i].get("role") == "user":
+            i += 1
+        # Skip assistant message (may contain tool_calls)
+        if i < len(messages) and messages[i].get("role") == "assistant":
+            i += 1
+            # Skip all consecutive tool results belonging to this assistant turn
+            while i < len(messages) and messages[i].get("role") == "tool":
+                i += 1
+        # Drop messages[1:i] as a complete logical group
+        if i <= 1:
+            # Safety: at least drop one message to avoid infinite loop
             messages.pop(1)
+        else:
+            del messages[1:i]
 
 
 # ── Tool execution ────────────────────────────────────────────────────────────
@@ -115,6 +132,14 @@ def run_agent(messages: list[dict], usage: dict | None = None) -> Iterator[str]:
             _add_usage(usage, response.usage.prompt_tokens, response.usage.completion_tokens, config.MODEL)
 
         message = response.choices[0].message
+
+        # Track tool usage
+        if usage is not None and message.tool_calls:
+            if "tools_used" not in usage:
+                usage["tools_used"] = []
+            for tc in message.tool_calls:
+                if tc.function.name not in usage["tools_used"]:
+                    usage["tools_used"].append(tc.function.name)
 
         # No tool calls → this IS the final answer, stream it directly
         if not message.tool_calls:

@@ -592,7 +592,7 @@ ORDER BY table_name;
 SELECT routine_name, routine_type
 FROM information_schema.routines
 WHERE routine_schema = 'public'
-  AND routine_name IN ('hybrid_search', 'search_by_hook', 'match_documents', 'clear_project_data', 'get_project_context')
+  AND routine_name IN ('hybrid_search', 'search_by_hook', 'clear_project_data', 'get_project_context')
 ORDER BY routine_name;
 
 -- Count indexes on documents

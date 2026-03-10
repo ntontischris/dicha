@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import logging
+import os
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -54,9 +55,20 @@ async def lifespan(app: FastAPI):
 
     app.state.http_client = httpx.AsyncClient(timeout=60)
     app.state.openai_client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
-    logger.info("Webhook service started")
+
+    # Proactive session cleanup every 5 minutes
+    async def _session_cleanup_loop() -> None:
+        while True:
+            await asyncio.sleep(300)
+            _cleanup_sessions()
+            logger.debug("Session cleanup: %d active sessions", len(_sessions))
+
+    cleanup_task = asyncio.create_task(_session_cleanup_loop())
+    logger.info("Webhook service started (agent workers=%d)", _AGENT_WORKERS)
 
     yield
+
+    cleanup_task.cancel()
 
     await app.state.http_client.aclose()
     logger.info("Webhook service stopped")
@@ -83,7 +95,8 @@ app.add_middleware(
 
 _PROMPT_FILE = Path(__file__).parent / "prompts" / "system_prompt.md"
 _SESSION_TTL = 1800.0  # 30 minutes
-_agent_pool = ThreadPoolExecutor(max_workers=4)
+_AGENT_WORKERS = int(os.getenv("AGENT_WORKERS", "12"))
+_agent_pool = ThreadPoolExecutor(max_workers=_AGENT_WORKERS)
 
 
 class ChatRequest(BaseModel):
@@ -132,25 +145,26 @@ def _load_system_prompt(project_id: str) -> str:
         return f"You are a WooCommerce AI assistant for project {project_id}."
 
 
-def _get_or_create_session(session_id: str, project_id: str) -> _Session:
-    """Get existing session or create new one."""
+def _get_or_create_session(session_id: str, project_id: str) -> tuple[_Session, str]:
+    """Get existing session or create new one. Returns (session, session_id)."""
     _cleanup_sessions()
 
     if session_id and session_id in _sessions:
         session = _sessions[session_id]
         if session.project_id == project_id:
             session.last_active = time.monotonic()
-            return session
+            return session, session_id
+        logger.warning("Session %s project mismatch (%s != %s), creating new",
+                        session_id, session.project_id, project_id)
 
     # Create new session
-    if not session_id:
-        session_id = str(uuid.uuid4())
+    new_id = session_id if session_id and session_id not in _sessions else str(uuid.uuid4())
 
     prompt = _load_system_prompt(project_id)
     messages = [{"role": "system", "content": prompt}]
     session = _Session(project_id=project_id, messages=messages)
-    _sessions[session_id] = session
-    return session
+    _sessions[new_id] = session
+    return session, new_id
 
 
 # -- Auth dependency ---------------------------------------------------
@@ -329,14 +343,8 @@ async def chat(
     """
     _verify_secret(x_webhook_secret, authorization)
 
-    session = _get_or_create_session(req.session_id, req.project_id)
+    session, sid = _get_or_create_session(req.session_id, req.project_id)
     session.messages.append({"role": "user", "content": req.message})
-
-    # Find session_id key
-    sid = next(
-        (k for k, v in _sessions.items() if v is session),
-        req.session_id or str(uuid.uuid4()),
-    )
 
     from agent import run_agent
     usage: dict = {}
@@ -528,8 +536,8 @@ async def re_ingest_docs(
     del_url = f"{config.SUPABASE_URL}/rest/v1/documents?project_id=eq.{project_id}&parent_id=is.null&is_parent=eq.false"
     doc_types = set(d.get("type", "") for d in existing_docs)
     if doc_types:
-        type_filter = ",".join(doc_types)
-        del_url += f"&type=in.({type_filter})"
+        quoted_types = ",".join(f'"{t}"' for t in doc_types)
+        del_url += f"&type=in.({quoted_types})"
     await http.delete(del_url, headers=headers)
 
     # 4. Re-ingest with parent-child pipeline
