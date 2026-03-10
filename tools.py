@@ -136,7 +136,7 @@ def search_code(query: str, category: str = "") -> str:
     payload: dict = {
         "query_text": query,
         "query_embedding": embedding,
-        "match_count": 30,
+        "match_count": 20,
         "p_project_id": config.get_project_id(),
 
         "p_doc_types": _CODE_DOC_TYPES,
@@ -153,12 +153,7 @@ def search_code(query: str, category: str = "") -> str:
     # Rerank
     reranked = _rerank(query, result, top_n=5)
 
-    # Hint if results are thin
-    hint = ""
-    if len(reranked) <= 1:
-        hint = "\n\n⚠️ Only 1 result found. Consider retrying with broader terms or without category filter for more complete coverage."
-
-    return _format_results(reranked) + hint
+    return _format_results(reranked)
 
 
 # -- Tool: search_docs ------------------------------------------------
@@ -176,7 +171,7 @@ def search_docs(query: str, category: str = "") -> str:
     payload: dict = {
         "query_text": query,
         "query_embedding": embedding,
-        "match_count": 30,
+        "match_count": 20,
         "p_project_id": config.get_project_id(),
 
         "p_doc_types": _DOCS_DOC_TYPES,
@@ -193,12 +188,7 @@ def search_docs(query: str, category: str = "") -> str:
     # Rerank
     reranked = _rerank(query, result, top_n=5)
 
-    # Hint if results are thin
-    hint = ""
-    if len(reranked) <= 1:
-        hint = "\n\n⚠️ Only 1 result found. Consider retrying with broader terms or without category filter for more complete coverage."
-
-    return _format_results(reranked) + hint
+    return _format_results(reranked)
 
 
 # -- Tool: search_by_hook ---------------------------------------------
