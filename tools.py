@@ -148,13 +148,17 @@ def search_code(query: str, category: str = "") -> str:
     if isinstance(result, dict) and "error" in result:
         return f"ERROR: {result['error']}"
     if not result:
-        return "No code results found."
+        return "No code results found. RETRY: try without category filter, or use different English search terms/synonyms."
 
     # Rerank
     reranked = _rerank(query, result, top_n=5)
 
-    # Format
-    return _format_results(reranked)
+    # Hint if results are thin
+    hint = ""
+    if len(reranked) <= 1:
+        hint = "\n\n⚠️ Only 1 result found. Consider retrying with broader terms or without category filter for more complete coverage."
+
+    return _format_results(reranked) + hint
 
 
 # -- Tool: search_docs ------------------------------------------------
@@ -184,12 +188,17 @@ def search_docs(query: str, category: str = "") -> str:
     if isinstance(result, dict) and "error" in result:
         return f"ERROR: {result['error']}"
     if not result:
-        return "No documentation found."
+        return "No documentation found. RETRY: try without category filter, use synonyms, or broaden the English search terms."
 
     # Rerank
     reranked = _rerank(query, result, top_n=5)
 
-    return _format_results(reranked)
+    # Hint if results are thin
+    hint = ""
+    if len(reranked) <= 1:
+        hint = "\n\n⚠️ Only 1 result found. Consider retrying with broader terms or without category filter for more complete coverage."
+
+    return _format_results(reranked) + hint
 
 
 # -- Tool: search_by_hook ---------------------------------------------
