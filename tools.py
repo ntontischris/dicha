@@ -151,7 +151,7 @@ def search_code(query: str, category: str = "") -> str:
         return "No code results found. RETRY: try without category filter, or use different English search terms/synonyms."
 
     # Rerank
-    reranked = _rerank(query, result, top_n=8)
+    reranked = _rerank(query, result, top_n=5)
 
     return _format_results(reranked)
 
@@ -186,7 +186,7 @@ def search_docs(query: str, category: str = "") -> str:
         return "No documentation found. RETRY: try without category filter, use synonyms, or broaden the English search terms."
 
     # Rerank
-    reranked = _rerank(query, result, top_n=8)
+    reranked = _rerank(query, result, top_n=5)
 
     return _format_results(reranked)
 
@@ -316,6 +316,9 @@ def _format_config(data: dict) -> str:
 
 # -- Formatting -------------------------------------------------------
 
+_BODY_MAX_CHARS = 3000
+
+
 def _format_results(results: list[dict]) -> str:
     """Format hybrid search results for the LLM."""
     parts = []
@@ -334,6 +337,8 @@ def _format_results(results: list[dict]) -> str:
         context_str = f"\nContext: {context}" if context else ""
         score = doc.get("score", 0)
         text = doc.get("body") or doc.get("text") or ""
+        if len(text) > _BODY_MAX_CHARS:
+            text = text[:_BODY_MAX_CHARS] + "\n... [truncated]"
 
         parts.append(
             f"[{i}] {doc.get('title', 'Untitled')}{flag}{scope_tag}{cat_tag}"

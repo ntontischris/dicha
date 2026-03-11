@@ -9,7 +9,6 @@ from agent import run_agent
 
 st.set_page_config(page_title="WooCommerce AI Agent", page_icon="🛍️", layout="wide")
 st.title("🛍️ WooCommerce AI Agent")
-st.caption(f"Project: **{config.PROJECT_ID}** | Model: `{config.MODEL}`")
 
 
 @st.cache_resource
@@ -40,6 +39,8 @@ with st.sidebar:
         st.session_state.messages = [{"role": "system", "content": load_system_prompt()}]
         st.session_state.session_usage = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
         st.rerun()
+
+st.caption(f"Project: **{config.PROJECT_ID}** | Model: `{config.MODEL}`")
 
 # ── Display conversation history (skip system message) ────────────────────────
 
@@ -72,6 +73,6 @@ if prompt := st.chat_input("Ρώτησε κάτι για το WooCommerce shop..
     in_tok  = usage.get("input_tokens", 0)
     out_tok = usage.get("output_tokens", 0)
     cost    = usage.get("cost_usd", 0.0)
-    st.caption(f"↳ Turn: {in_tok:,} in / {out_tok:,} out tokens — ${cost:.4f}")
+    st.caption(f"↳ {in_tok:,} in / {out_tok:,} out — ${cost:.4f}")
 
     st.rerun()
