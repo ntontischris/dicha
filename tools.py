@@ -151,7 +151,7 @@ def search_code(query: str, category: str = "") -> str:
         return "No code results found. RETRY: try without category filter, or use different English search terms/synonyms."
 
     # Rerank
-    reranked = _rerank(query, result, top_n=5)
+    reranked = _rerank(query, result, top_n=4)
 
     return _format_results(reranked)
 
@@ -186,7 +186,7 @@ def search_docs(query: str, category: str = "") -> str:
         return "No documentation found. RETRY: try without category filter, use synonyms, or broaden the English search terms."
 
     # Rerank
-    reranked = _rerank(query, result, top_n=5)
+    reranked = _rerank(query, result, top_n=4)
 
     return _format_results(reranked)
 
@@ -201,7 +201,7 @@ def search_by_hook(hook_name: str) -> str:
     result = _rpc("search_by_hook", {
         "p_hook_name": hook_name,
         "p_project_id": config.get_project_id(),
-        "match_count": 10,
+        "match_count": 5,
     })
     if isinstance(result, dict) and "error" in result:
         return f"ERROR: {result['error']}"
@@ -214,12 +214,14 @@ def search_by_hook(hook_name: str) -> str:
         active = doc.get("is_active")
         flag = " [ACTIVE]" if active else " [INACTIVE]" if active is False else ""
         text = doc.get("body") or doc.get("text") or ""
+        if len(text) > _BODY_MAX_CHARS:
+            text = text[:_BODY_MAX_CHARS] + "\n... [truncated]"
         parts.append(
             f"[{i}] {doc.get('title', 'Untitled')}{flag}\n"
             f"Hooks: {', '.join(hooks)}\n{text}"
         )
 
-    return "\n\n" + ("\n" + "=" * 60 + "\n\n").join(parts)
+    return "\n\n---\n\n".join(parts)
 
 
 # -- Tool: get_shop_config -------------------------------------------
@@ -273,14 +275,23 @@ def _format_config(data: dict) -> str:
         for g in gateways:
             parts.append(f"- {g.get('title')} ({g.get('gateway_id')})")
 
-    # Shipping methods (enabled only)
+    # Shipping methods (enabled only) — grouped by zone for brevity
     methods = [m for m in (data.get("shipping_methods") or []) if m.get("enabled")]
     if methods:
-        parts.append("\n=== Shipping Methods (enabled) ===")
+        parts.append(f"\n=== Shipping Methods ({len(methods)} enabled) ===")
+        # Group by zone
+        zones: dict[str, list] = {}
         for m in methods:
-            cost_str = f" — cost: {m.get('cost')}" if m.get("cost") else ""
-            req_str = f" — requires: {m.get('requires')} min {m.get('min_amount')}" if m.get("requires") else ""
-            parts.append(f"- [{m.get('zone_name')}] {m.get('method_title')}{cost_str}{req_str}")
+            zone = m.get("zone_name", "Unknown")
+            zones.setdefault(zone, []).append(m)
+        for zone_name, zone_methods in zones.items():
+            method_strs = []
+            for m in zone_methods:
+                title = m.get("method_title", "?")
+                cost = m.get("cost")
+                cost_str = f" ({cost})" if cost else ""
+                method_strs.append(f"{title}{cost_str}")
+            parts.append(f"[{zone_name}]: {', '.join(method_strs)}")
 
     # Tax
     tax = data.get("tax_settings") or {}
@@ -304,19 +315,25 @@ def _format_config(data: dict) -> str:
         parts.append(f"Guest checkout: {general.get('enable_guest_checkout')}")
         parts.append(f"Stock management: {general.get('manage_stock')}")
 
-    # Active plugins
+    # Active plugins (top 15 — omit less relevant ones to save tokens)
     plugins = data.get("active_plugins") or []
     if plugins:
-        parts.append(f"\n=== Active Plugins ({len(plugins)}) ===")
-        for p in plugins:
+        shown = plugins[:15]
+        parts.append(f"\n=== Active Plugins ({len(plugins)} total, showing {len(shown)}) ===")
+        for p in shown:
             parts.append(f"- {p.get('plugin_name')} v{p.get('version')}")
+        if len(plugins) > 15:
+            parts.append(f"... and {len(plugins) - 15} more")
 
-    return "\n".join(parts)
+    output = "\n".join(parts)
+    if len(output) > 5000:
+        output = output[:5000] + "\n... [truncated — use search_code() for specific details]"
+    return output
 
 
 # -- Formatting -------------------------------------------------------
 
-_BODY_MAX_CHARS = 4500
+_BODY_MAX_CHARS = 3500
 
 
 def _format_results(results: list[dict]) -> str:
@@ -325,27 +342,20 @@ def _format_results(results: list[dict]) -> str:
     for i, doc in enumerate(results, 1):
         active = doc.get("is_active")
         flag = " [ACTIVE]" if active else " [INACTIVE]" if active is False else ""
-        scope = doc.get("scope", "")
-        scope_tag = f" [{scope.upper()}]" if scope == "global" else ""
-        category = doc.get("category", "")
-        cat_tag = f" [{category}]" if category and category != "general" else ""
         hooks = doc.get("hooks") or []
         hooks_str = f"\nHooks: {', '.join(hooks)}" if hooks else ""
-        section = doc.get("section_path", "")
-        section_str = f"\nSection: {section}" if section else ""
         context = doc.get("context_text", "")
         context_str = f"\nContext: {context}" if context else ""
-        score = doc.get("score", 0)
         text = doc.get("body") or doc.get("text") or ""
         if len(text) > _BODY_MAX_CHARS:
             text = text[:_BODY_MAX_CHARS] + "\n... [truncated]"
 
         parts.append(
-            f"[{i}] {doc.get('title', 'Untitled')}{flag}{scope_tag}{cat_tag}"
-            f"  (score={score:.4f}){hooks_str}{section_str}{context_str}\n{text}"
+            f"[{i}] {doc.get('title', 'Untitled')}{flag}"
+            f"{hooks_str}{context_str}\n{text}"
         )
 
-    return "\n\n" + ("\n" + "=" * 60 + "\n\n").join(parts)
+    return "\n\n---\n\n".join(parts)
 
 
 # -- OpenAI tool schemas ----------------------------------------------
@@ -355,31 +365,15 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "search_code",
-            "description": (
-                "Search project CODE ONLY: snippets, functions.php, theme files, and custom code "
-                "using hybrid vector + keyword search with AI reranking. "
-                "Returns only code documents — never documentation or guides. "
-                "Use for: finding custom code, hooks, filters, understanding why something "
-                "behaves a certain way, finding specific function names or implementations. "
-                "RETRY STRATEGY: If no results, try without category filter. If wrong results, "
-                "add a category or use more specific technical terms. "
-                "IMPORTANT: Always search in English even if the user asks in Greek."
-            ),
+            "description": "Search project code: snippets, functions.php, theme files. Hybrid vector+keyword search. Always query in English.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Technical search query in English (translate from user's language if needed)",
-                    },
+                    "query": {"type": "string", "description": "Search query in English"},
                     "category": {
                         "type": "string",
-                        "enum": [
-                            "shipping", "payments", "checkout", "cart", "tax",
-                            "products", "orders", "emails", "theme", "security",
-                            "performance", "general",
-                        ],
-                        "description": "Optional: filter by WooCommerce area. Omit for broader results, add for precision.",
+                        "enum": ["shipping", "payments", "checkout", "cart", "tax", "products", "orders", "emails", "theme", "security", "performance", "general"],
+                        "description": "Optional category filter",
                     },
                 },
                 "required": ["query"],
@@ -390,31 +384,15 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "search_docs",
-            "description": (
-                "Search DOCUMENTATION ONLY: company technical guides, how-to articles, "
-                "WooCommerce best practices, and project-specific notes. "
-                "Returns only documentation — never code snippets. "
-                "Use for: finding how to implement something, troubleshooting guides, "
-                "best practices, agency knowledge base, client notes. "
-                "RETRY STRATEGY: If no results, broaden the query or remove category. "
-                "If too generic, add category filter. "
-                "IMPORTANT: Always search in English even if the user asks in Greek."
-            ),
+            "description": "Search documentation: company guides, how-tos, project notes. Always query in English.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Search query in English about documentation topics",
-                    },
+                    "query": {"type": "string", "description": "Search query in English"},
                     "category": {
                         "type": "string",
-                        "enum": [
-                            "shipping", "payments", "checkout", "cart", "tax",
-                            "products", "orders", "emails", "theme", "security",
-                            "performance", "general",
-                        ],
-                        "description": "Optional: filter by topic area",
+                        "enum": ["shipping", "payments", "checkout", "cart", "tax", "products", "orders", "emails", "theme", "security", "performance", "general"],
+                        "description": "Optional category filter",
                     },
                 },
                 "required": ["query"],
@@ -425,21 +403,11 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "search_by_hook",
-            "description": (
-                "Find all code that uses a specific WordPress/WooCommerce hook or filter. "
-                "Direct GIN index lookup — fast and precise. "
-                "Use when you know the exact hook name (e.g. 'woocommerce_package_rates', "
-                "'woocommerce_checkout_fields', 'wp_enqueue_scripts'). "
-                "FOLLOW-UP: After finding hook usage, use search_code() to find related code "
-                "that may interact with the same functionality."
-            ),
+            "description": "Find code using a specific WP/WC hook. GIN index lookup — exact hook name required.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "hook_name": {
-                        "type": "string",
-                        "description": "Exact WordPress/WooCommerce hook or filter name",
-                    },
+                    "hook_name": {"type": "string", "description": "Exact hook/filter name"},
                 },
                 "required": ["hook_name"],
             },
@@ -449,16 +417,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "get_shop_config",
-            "description": (
-                "Get complete structured shop configuration in one call: "
-                "WordPress/WooCommerce/PHP versions, active theme, "
-                "payment gateways, shipping zones & methods, tax settings, "
-                "general settings (currency, country, coupons, guest checkout, stock), "
-                "all active plugins with versions. "
-                "Use FIRST for: version checks, config questions, plugin lists, "
-                "shipping/payment setup, tax configuration, currency, store location, "
-                "general store status. Also use as context when debugging any issue."
-            ),
+            "description": "Get shop config: versions, theme, plugins, gateways, shipping, tax, settings.",
             "parameters": {
                 "type": "object",
                 "properties": {},
