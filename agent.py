@@ -41,7 +41,7 @@ _CONTEXT_LIMITS = {
     "gpt-4o-mini":  120_000,
 }
 _RESPONSE_BUFFER = 8_000
-_MAX_TOOL_ROUNDS = 3
+_MAX_TOOL_ROUNDS = 2
 
 # ── Conservative model routing ────────────────────────────────────────────────
 # Mini ONLY for trivial factual lookups (version, plugin list, theme name).
@@ -222,23 +222,35 @@ def run_agent(messages: list[dict], usage: dict | None = None, model: str | None
             yield content
             return
 
-        # Append the assistant's tool-call turn to history
-        messages.append(message.model_dump(exclude_unset=True))
+        # Cap tool calls per round to avoid token explosion (model sometimes fires 5+ searches)
+        _MAX_CALLS_PER_ROUND = 3
+        tool_calls = message.tool_calls[:_MAX_CALLS_PER_ROUND]
+        if len(message.tool_calls) > _MAX_CALLS_PER_ROUND:
+            _console.print(
+                f"  [dim][[cap]][/dim] [yellow]{len(message.tool_calls)} tool calls → capped to {_MAX_CALLS_PER_ROUND}[/yellow]",
+                highlight=False,
+            )
+            # Rebuild message with only the kept tool calls for history
+            capped_msg = message.model_dump(exclude_unset=True)
+            capped_msg["tool_calls"] = capped_msg["tool_calls"][:_MAX_CALLS_PER_ROUND]
+            messages.append(capped_msg)
+        else:
+            messages.append(message.model_dump(exclude_unset=True))
 
         tool_rounds += 1
 
         # Execute all requested tools in parallel (preserve original order in results)
         current_project = config.get_project_id()
         tool_results: dict[str, tuple[str, dict, str]] = {}
-        with ThreadPoolExecutor(max_workers=len(message.tool_calls)) as pool:
-            futures = {pool.submit(_execute_tool, tc, current_project): tc for tc in message.tool_calls}
+        with ThreadPoolExecutor(max_workers=len(tool_calls)) as pool:
+            futures = {pool.submit(_execute_tool, tc, current_project): tc for tc in tool_calls}
             for future in as_completed(futures):
                 tc_id, name, args, result = future.result()
                 tool_results[tc_id] = (name, args, result)
                 _console.print(f"  [dim][[tool]][/dim] [cyan]{name}[/cyan]", highlight=False)
 
         # Append results in the original order the model requested them (OpenAI API requirement)
-        for tc in message.tool_calls:
+        for tc in tool_calls:
             name, args, result = tool_results[tc.id]
             messages.append({
                 "role":         "tool",

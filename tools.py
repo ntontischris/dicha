@@ -155,7 +155,7 @@ def search_code(query: str, category: str = "") -> str:
         return "No code results found. RETRY: try without category filter, or use different English search terms/synonyms."
 
     # Rerank
-    reranked = _rerank(query, result, top_n=6)
+    reranked = _rerank(query, result, top_n=3)
 
     return _format_results(reranked)
 
@@ -190,7 +190,7 @@ def search_docs(query: str, category: str = "") -> str:
         return "No documentation found. RETRY: try without category filter, use synonyms, or broaden the English search terms."
 
     # Rerank
-    reranked = _rerank(query, result, top_n=6)
+    reranked = _rerank(query, result, top_n=3)
 
     return _format_results(reranked)
 
@@ -319,39 +319,58 @@ def _format_config(data: dict) -> str:
         parts.append(f"Guest checkout: {general.get('enable_guest_checkout')}")
         parts.append(f"Stock management: {general.get('manage_stock')}")
 
-    # Active plugins — show ALL for complete compatibility analysis
+    # Active plugins — compact format (name only) to save tokens
     plugins = data.get("active_plugins") or []
     if plugins:
-        parts.append(f"\n=== Active Plugins ({len(plugins)} total) ===")
-        for p in plugins:
-            parts.append(f"- {p.get('plugin_name')} v{p.get('version')}")
+        names = [p.get("plugin_name", "?") for p in plugins]
+        parts.append(f"\n=== Active Plugins ({len(plugins)}) ===")
+        parts.append(", ".join(names))
 
     return "\n".join(parts)
 
 
 # -- Formatting -------------------------------------------------------
 
-_BODY_MAX_CHARS = 5000
+_BODY_HIGH = 3000    # relevance >= 0.5 → full body
+_BODY_MEDIUM = 1500  # relevance 0.2-0.5 → truncated body
+_NOISE_THRESHOLD = 0.1  # relevance < 0.1 → drop entirely
 
 
 def _format_results(results: list[dict]) -> str:
-    """Format hybrid search results for the LLM."""
+    """Format hybrid search results for the LLM.
+
+    Smart truncation: high-relevance results get full body,
+    medium gets truncated, noise (< 0.1) is dropped entirely.
+    """
     parts = []
-    for i, doc in enumerate(results, 1):
+    idx = 0
+    for doc in results:
+        score = doc.get("relevance_score")
+
+        # Drop noise — wastes tokens and confuses the model
+        if score is not None and score < _NOISE_THRESHOLD:
+            continue
+
+        # Smart body truncation based on relevance
+        if score is not None and score < 0.5:
+            max_chars = _BODY_MEDIUM
+        else:
+            max_chars = _BODY_HIGH
+
+        idx += 1
         active = doc.get("is_active")
         flag = " [ACTIVE]" if active else " [INACTIVE]" if active is False else ""
-        score = doc.get("relevance_score")
         score_str = f" (relevance: {score})" if score is not None else ""
         hooks = doc.get("hooks") or []
         hooks_str = f"\nHooks: {', '.join(hooks)}" if hooks else ""
         context = doc.get("context_text", "")
         context_str = f"\nContext: {context}" if context else ""
         text = doc.get("body") or doc.get("text") or ""
-        if len(text) > _BODY_MAX_CHARS:
-            text = text[:_BODY_MAX_CHARS] + "\n... [truncated]"
+        if len(text) > max_chars:
+            text = text[:max_chars] + "\n... [truncated]"
 
         parts.append(
-            f"[{i}] {doc.get('title', 'Untitled')}{flag}{score_str}"
+            f"[{idx}] {doc.get('title', 'Untitled')}{flag}{score_str}"
             f"{hooks_str}{context_str}\n{text}"
         )
 
