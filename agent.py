@@ -42,6 +42,34 @@ _CONTEXT_LIMITS = {
 _RESPONSE_BUFFER = 8_000
 
 
+def _compress_old_tool_results(messages: list[dict]) -> None:
+    """Replace tool results from PREVIOUS turns with short summaries.
+
+    Keeps the current (last) tool-call round intact so the model can use
+    those results for its answer.  Only compresses tool messages whose
+    content is longer than a small threshold — tiny results aren't worth
+    touching.
+    """
+    # Find the index of the last assistant message that has tool_calls.
+    # Everything BEFORE that round is "old" and can be compressed.
+    last_tc_idx = None
+    for idx in range(len(messages) - 1, -1, -1):
+        msg = messages[idx]
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            last_tc_idx = idx
+            break
+
+    if last_tc_idx is None:
+        return  # no tool calls at all
+
+    # Compress tool results that appear BEFORE last_tc_idx
+    _MIN_CHARS = 200  # don't bother compressing tiny results
+    for idx in range(1, last_tc_idx):
+        msg = messages[idx]
+        if msg.get("role") == "tool" and len(msg.get("content", "")) > _MIN_CHARS:
+            msg["content"] = "[previous search result — see assistant summary above]"
+
+
 def _count_tokens(messages: list[dict], model: str) -> int:
     try:
         enc = tiktoken.encoding_for_model(model)
@@ -120,7 +148,8 @@ def run_agent(messages: list[dict], usage: dict | None = None, model: str | None
     if usage is not None:
         usage["model"] = active_model
     while True:
-        # Trim context if needed before each call
+        # Compress old tool results + trim context before each call
+        _compress_old_tool_results(messages)
         _trim_messages(messages, active_model)
 
         # Non-streaming call — needed for tool_calls structured response
