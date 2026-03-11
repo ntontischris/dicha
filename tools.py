@@ -316,7 +316,7 @@ def _format_config(data: dict) -> str:
 
 # -- Formatting -------------------------------------------------------
 
-_BODY_MAX_CHARS = 3000
+_BODY_MAX_CHARS = 4500
 
 
 def _format_results(results: list[dict]) -> str:
