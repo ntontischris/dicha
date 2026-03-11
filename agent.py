@@ -1,4 +1,5 @@
 import json
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Iterator
 
@@ -40,6 +41,31 @@ _CONTEXT_LIMITS = {
     "gpt-4o-mini":  120_000,
 }
 _RESPONSE_BUFFER = 8_000
+_MAX_TOOL_ROUNDS = 3
+
+# ── Conservative model routing ────────────────────────────────────────────────
+# Mini ONLY for trivial factual lookups (version, plugin list, theme name).
+# Everything else (code, debug, explanation, implementation) → full model.
+
+_SIMPLE_PATTERNS = [
+    r"(?:τι|ποιο|ποια|ποιος|ποιες|ποια|what|which)\s.{0,20}(?:version|έκδοση|theme|θέμα|php)",
+    r"(?:τι|ποιο|what)\s.{0,10}(?:woocommerce|wordpress|wp|wc)",
+    r"(?:πόσα|πόσες|πόσοι|how many)\s.{0,20}(?:plugin|order|product|προϊόν)",
+    r"(?:ποια|ποιες|list|λίστα|δείξε|show)\s.{0,20}(?:plugin|gateway|πύλ)",
+    r"(?:ενεργ|active|enabled)\s.{0,20}(?:plugin|gateway|method|μέθοδο)",
+    r"(?:τρέχει|runs?|using)\s.{0,15}(?:version|php|wc|wp)",
+]
+
+
+def _select_model(user_message: str) -> str:
+    """Route trivial lookups to mini, everything else to full model."""
+    msg_lower = user_message.lower().strip()
+    # Short messages that match simple patterns → mini
+    if len(msg_lower) < 80:
+        for pattern in _SIMPLE_PATTERNS:
+            if re.search(pattern, msg_lower):
+                return config.MODEL_MINI
+    return config.MODEL
 
 
 def _compress_old_tool_results(messages: list[dict]) -> None:
@@ -144,9 +170,21 @@ def run_agent(messages: list[dict], usage: dict | None = None, model: str | None
     - usage: optional mutable dict updated in-place with token counts and cost
     - model: optional model override (defaults to config.MODEL)
     """
-    active_model = model or config.MODEL
+    # Smart model routing: use mini for trivial lookups, full for everything else
+    if model:
+        active_model = model
+    else:
+        last_user_msg = ""
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                last_user_msg = msg.get("content", "")
+                break
+        active_model = _select_model(last_user_msg)
+
     if usage is not None:
         usage["model"] = active_model
+
+    tool_rounds = 0
     while True:
         # Compress old tool results + trim context before each call
         _compress_old_tool_results(messages)
@@ -187,6 +225,8 @@ def run_agent(messages: list[dict], usage: dict | None = None, model: str | None
         # Append the assistant's tool-call turn to history
         messages.append(message.model_dump(exclude_unset=True))
 
+        tool_rounds += 1
+
         # Execute all requested tools in parallel (preserve original order in results)
         current_project = config.get_project_id()
         tool_results: dict[str, tuple[str, dict, str]] = {}
@@ -205,3 +245,9 @@ def run_agent(messages: list[dict], usage: dict | None = None, model: str | None
                 "tool_call_id": tc.id,
                 "content":      result,
             })
+
+        # Hard limit: force final answer after max tool rounds
+        if tool_rounds >= _MAX_TOOL_ROUNDS:
+            _console.print(f"  [dim][[limit]][/dim] [yellow]Max {_MAX_TOOL_ROUNDS} tool rounds reached — forcing answer[/yellow]", highlight=False)
+            messages.append({"role": "user", "content": "You have used all available search rounds. Answer NOW with what you have. Do NOT call any more tools."})
+

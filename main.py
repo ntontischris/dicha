@@ -130,8 +130,9 @@ def main() -> None:
             in_tok  = usage.get("input_tokens", 0)
             out_tok = usage.get("output_tokens", 0)
             cost    = usage.get("cost_usd", 0.0)
+            used_model = usage.get("model", config.MODEL)
             console.print(
-                f"[dim]  tokens: {in_tok:,} in / {out_tok:,} out  |  "
+                f"[dim]  model: {used_model}  |  tokens: {in_tok:,} in / {out_tok:,} out  |  "
                 f"cost: ${cost:.4f}[/dim]"
             )
             console.print()

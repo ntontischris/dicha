@@ -111,7 +111,11 @@ def _rerank(query: str, documents: list[dict], top_n: int = 5) -> list[dict]:
             top_n=min(top_n, len(documents)),
             model="rerank-v3.5",
         )
-        return [documents[r.index] for r in result.results]
+        reranked = []
+        for r in result.results:
+            doc = {**documents[r.index], "relevance_score": round(r.relevance_score, 3)}
+            reranked.append(doc)
+        return reranked
     except Exception:
         return documents[:top_n]
 
@@ -151,7 +155,7 @@ def search_code(query: str, category: str = "") -> str:
         return "No code results found. RETRY: try without category filter, or use different English search terms/synonyms."
 
     # Rerank
-    reranked = _rerank(query, result, top_n=4)
+    reranked = _rerank(query, result, top_n=6)
 
     return _format_results(reranked)
 
@@ -186,7 +190,7 @@ def search_docs(query: str, category: str = "") -> str:
         return "No documentation found. RETRY: try without category filter, use synonyms, or broaden the English search terms."
 
     # Rerank
-    reranked = _rerank(query, result, top_n=4)
+    reranked = _rerank(query, result, top_n=6)
 
     return _format_results(reranked)
 
@@ -315,25 +319,19 @@ def _format_config(data: dict) -> str:
         parts.append(f"Guest checkout: {general.get('enable_guest_checkout')}")
         parts.append(f"Stock management: {general.get('manage_stock')}")
 
-    # Active plugins (top 15 — omit less relevant ones to save tokens)
+    # Active plugins — show ALL for complete compatibility analysis
     plugins = data.get("active_plugins") or []
     if plugins:
-        shown = plugins[:15]
-        parts.append(f"\n=== Active Plugins ({len(plugins)} total, showing {len(shown)}) ===")
-        for p in shown:
+        parts.append(f"\n=== Active Plugins ({len(plugins)} total) ===")
+        for p in plugins:
             parts.append(f"- {p.get('plugin_name')} v{p.get('version')}")
-        if len(plugins) > 15:
-            parts.append(f"... and {len(plugins) - 15} more")
 
-    output = "\n".join(parts)
-    if len(output) > 5000:
-        output = output[:5000] + "\n... [truncated — use search_code() for specific details]"
-    return output
+    return "\n".join(parts)
 
 
 # -- Formatting -------------------------------------------------------
 
-_BODY_MAX_CHARS = 3500
+_BODY_MAX_CHARS = 5000
 
 
 def _format_results(results: list[dict]) -> str:
@@ -342,6 +340,8 @@ def _format_results(results: list[dict]) -> str:
     for i, doc in enumerate(results, 1):
         active = doc.get("is_active")
         flag = " [ACTIVE]" if active else " [INACTIVE]" if active is False else ""
+        score = doc.get("relevance_score")
+        score_str = f" (relevance: {score})" if score is not None else ""
         hooks = doc.get("hooks") or []
         hooks_str = f"\nHooks: {', '.join(hooks)}" if hooks else ""
         context = doc.get("context_text", "")
@@ -351,7 +351,7 @@ def _format_results(results: list[dict]) -> str:
             text = text[:_BODY_MAX_CHARS] + "\n... [truncated]"
 
         parts.append(
-            f"[{i}] {doc.get('title', 'Untitled')}{flag}"
+            f"[{i}] {doc.get('title', 'Untitled')}{flag}{score_str}"
             f"{hooks_str}{context_str}\n{text}"
         )
 
