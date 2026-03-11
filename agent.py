@@ -107,21 +107,25 @@ def _execute_tool(tc, project_id: str) -> tuple[str, str, dict, str]:
 
 # ── Agent loop (generator — yields str chunks) ────────────────────────────────
 
-def run_agent(messages: list[dict], usage: dict | None = None) -> Iterator[str]:
+def run_agent(messages: list[dict], usage: dict | None = None, model: str | None = None) -> Iterator[str]:
     """
     Run the agentic loop. Yields text chunks as they stream from OpenAI.
 
     - Tool-call turns: non-streaming (structured response required), parallel execution
     - Final answer turn: streaming (yields chunks word-by-word)
     - usage: optional mutable dict updated in-place with token counts and cost
+    - model: optional model override (defaults to config.MODEL)
     """
+    active_model = model or config.MODEL
+    if usage is not None:
+        usage["model"] = active_model
     while True:
         # Trim context if needed before each call
-        _trim_messages(messages, config.MODEL)
+        _trim_messages(messages, active_model)
 
         # Non-streaming call — needed for tool_calls structured response
         response = _client.chat.completions.create(
-            model=config.MODEL,
+            model=active_model,
             messages=messages,
             tools=TOOL_SCHEMAS,
             tool_choice="auto",
@@ -129,7 +133,7 @@ def run_agent(messages: list[dict], usage: dict | None = None) -> Iterator[str]:
 
         # Track usage from this non-streaming call
         if usage is not None and response.usage:
-            _add_usage(usage, response.usage.prompt_tokens, response.usage.completion_tokens, config.MODEL)
+            _add_usage(usage, response.usage.prompt_tokens, response.usage.completion_tokens, active_model)
 
         message = response.choices[0].message
 
