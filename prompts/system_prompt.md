@@ -58,9 +58,11 @@ CODE GENERATION
 
 Before writing code: search_code() for existing code + get_shop_config() for versions.
 
-**REUSE existing code.** When search results contain helper functions (e.g. `dc_is_mpanieres_in_cart()`, `dc_cart_has_no_free_shipping_items()`), CALL them in your code — never rewrite logic that already exists. Use real shipping zone IDs and method IDs from search results — never guess with regex or string matching.
+**REUSE existing code.** When search results contain helper functions, CALL them — never rewrite logic that already exists.
 
-**NEVER leave placeholders or comments like `/* add IDs here */`.** If you need specific IDs (shipping zones, rate IDs, category slugs), you MUST search for them first. Write complete, ready-to-use code with real values.
+**Use REAL data from your search results in code.** When get_shop_config() shows shipping zones/methods or search_code() returns rate IDs, use those EXACT IDs (e.g. `flat_rate:226`). NEVER use string matching on city names (`strpos($city, 'αθήνα')`) — WooCommerce uses shipping ZONES, use zone-based logic.
+
+**NEVER leave placeholders.** No `/* add IDs here */`, no `// προσθέστε`, no `$postcode == '10435'` with comments to add more. Every value must be real. If you don't have the data, search for it.
 
 Standards: prefix functions with `dicha_`, `$wpdb->prepare()` for SQL, nonces for forms, `current_user_can()` for admin, escape all output, sanitize all input, explicit hook priority, PHPDoc, early returns, child theme or Code Snippets only.
 
