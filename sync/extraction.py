@@ -25,6 +25,9 @@ _PHP_HOOKS = re.compile(
 )
 _PHP_FUNCTIONS = re.compile(r"function\s+(\w+)\s*\(")
 _PHP_CLASSES = re.compile(r"class\s+(\w+)")
+# Captures project-specific function CALLS (dc_*, dicha_*) — not just definitions.
+# Stored in keywords so FTS finds both caller and definition snippets.
+_PHP_FUNC_CALLS = re.compile(r"\b(dc_\w+|dicha_\w+)\s*\(")
 _JS_HOOKS = re.compile(r"wp\.hooks\.(?:addFilter|addAction)\s*\(\s*['\"]([^'\"]+)")
 _JS_JQUERY = re.compile(r"(?:jQuery|\$)\s*\(\s*['\"]([^'\"]{2,40})['\"]")
 
@@ -129,11 +132,15 @@ def extract_metadata(
     search_text = f"{title} {tags}"
     meta.category, meta.subcategory = _categorize_by_hooks(meta.hooks, search_text)
 
-    # Build keywords: title words + function names + hook names + tags
+    # Build keywords: title words + function names + function calls + hook names + tags
+    # Function calls (dc_*/dicha_*) ensure caller snippets share keywords with
+    # the definition snippets, improving FTS co-discovery.
+    func_calls = list(dict.fromkeys(_PHP_FUNC_CALLS.findall(code)))
     kw_sources = [
         title,
         tags,
         " ".join(meta.functions),
+        " ".join(func_calls),
         " ".join(meta.hooks[:5]),  # limit hook keywords
     ]
     raw_keywords = " ".join(kw_sources).split()

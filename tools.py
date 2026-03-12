@@ -14,6 +14,7 @@ Search pipeline:
 """
 
 import json
+import re
 import time
 import threading
 import httpx
@@ -119,12 +120,65 @@ def _rerank(query: str, documents: list[dict], top_n: int = 5) -> list[dict]:
 
 # -- Tool: search (unified) -------------------------------------------
 
+def _resolve_helpers(results: list[dict], project_id: str) -> list[dict]:
+    """Auto-fetch helper functions called but not defined in results.
+
+    Scans result bodies for dc_*/dicha_* function calls, checks which
+    ones are NOT defined in any result, and fetches the missing definitions
+    one by one. Each search is cheap (~$0.0001 embedding + 1 Supabase call).
+    """
+    all_called: set[str] = set()
+    all_defined: set[str] = set()
+
+    for doc in results:
+        body = doc.get("body") or doc.get("text") or ""
+        all_called.update(_FUNC_CALL_RE.findall(body))
+        all_defined.update(_FUNC_DEF_RE.findall(body))
+
+    missing = all_called - all_defined
+    if not missing:
+        return results
+
+    existing_ids = {doc.get("id") for doc in results}
+    # Search each missing function individually for precise results.
+    # Limit to 5 helpers to cap cost and latency.
+    for func_name in sorted(missing)[:5]:
+        try:
+            embedding = _embed_query(func_name)
+        except Exception:
+            continue
+
+        helper_results = _rpc("hybrid_search", {
+            "query_text": func_name,
+            "query_embedding": embedding,
+            "match_count": 3,
+            "p_project_id": project_id,
+        })
+
+        if not helper_results or isinstance(helper_results, dict):
+            continue
+
+        for doc in helper_results:
+            if doc.get("id") in existing_ids:
+                continue
+            body = doc.get("body") or doc.get("text") or ""
+            defs = set(_FUNC_DEF_RE.findall(body))
+            if func_name in defs:
+                doc["_auto_resolved"] = True
+                results.append(doc)
+                existing_ids.add(doc.get("id"))
+                break  # found this helper, move to next
+
+    return results
+
+
 def search(query: str, category: str = "") -> str:
     """Search all project knowledge: code, company guides, project docs.
 
     Uses hybrid search (vector + weighted FTS + RRF) across ALL document
     types — code snippets, functions.php, theme files, company docs,
     and project docs. Global company docs are always included.
+    Auto-resolves missing helper functions found in results.
     """
     try:
         embedding = _embed_query(query, category)
@@ -149,6 +203,9 @@ def search(query: str, category: str = "") -> str:
 
     # Rerank — top 8 for richer context (gpt-5-mini cost allows more data)
     reranked = _rerank(query, result, top_n=8)
+
+    # Auto-resolve: fetch helper function definitions called in results
+    reranked = _resolve_helpers(reranked, config.get_project_id())
 
     return _format_results(reranked)
 
@@ -385,6 +442,11 @@ _BODY_HIGH = 4000    # relevance >= 0.5 → full body
 _BODY_MEDIUM = 2500  # relevance 0.2-0.5 → truncated body
 _NOISE_THRESHOLD = 0.1  # relevance < 0.1 → drop entirely
 
+# Detect project-specific function calls and definitions in search results.
+# Used to warn the agent about helper functions it needs to search for.
+_FUNC_CALL_RE = re.compile(r"\b(dc_\w+|dicha_\w+)\s*\(")
+_FUNC_DEF_RE = re.compile(r"function\s+(dc_\w+|dicha_\w+)\s*\(")
+
 
 def _format_results(results: list[dict]) -> str:
     """Format hybrid search results for the LLM.
@@ -392,9 +454,12 @@ def _format_results(results: list[dict]) -> str:
     Smart truncation: high-relevance results get full body,
     medium gets truncated, noise (< 0.1) is dropped entirely.
     Warns when top results have low relevance to guide re-search.
+    Highlights function calls per result and warns about missing helpers.
     """
     parts = []
     idx = 0
+    all_called: set[str] = set()
+    all_defined: set[str] = set()
 
     # Warn agent when top results are low-relevance → guide re-search
     top_scores = [d.get("relevance_score", 1.0) for d in results[:3]]
@@ -407,13 +472,16 @@ def _format_results(results: list[dict]) -> str:
 
     for doc in results:
         score = doc.get("relevance_score")
+        is_auto = doc.get("_auto_resolved", False)
 
-        # Drop noise — wastes tokens and confuses the model
-        if score is not None and score < _NOISE_THRESHOLD:
+        # Drop noise — but never drop auto-resolved helpers
+        if not is_auto and score is not None and score < _NOISE_THRESHOLD:
             continue
 
-        # Smart body truncation based on relevance
-        if score is not None and score < 0.5:
+        # Smart body truncation based on relevance (auto-resolved get full body)
+        if is_auto:
+            max_chars = _BODY_HIGH
+        elif score is not None and score < 0.5:
             max_chars = _BODY_MEDIUM
         else:
             max_chars = _BODY_HIGH
@@ -423,6 +491,7 @@ def _format_results(results: list[dict]) -> str:
         type_tag = f" [{doc_type}]" if doc_type else ""
         active = doc.get("is_active")
         flag = " [ACTIVE]" if active else " [INACTIVE]" if active is False else ""
+        auto_tag = " [AUTO-RESOLVED HELPER — USE THIS, don't rewrite]" if is_auto else ""
         score_str = f" (relevance: {score})" if score is not None else ""
         hooks = doc.get("hooks") or []
         hooks_str = f"\nHooks: {', '.join(hooks)}" if hooks else ""
@@ -436,9 +505,27 @@ def _format_results(results: list[dict]) -> str:
         if len(text) > max_chars:
             text = text[:max_chars] + "\n... [truncated]"
 
+        # Track function calls and definitions across all results
+        calls_in_doc = set(_FUNC_CALL_RE.findall(text))
+        defs_in_doc = set(_FUNC_DEF_RE.findall(text))
+        all_called.update(calls_in_doc)
+        all_defined.update(defs_in_doc)
+        # Show which project functions this code calls (helps agent find helpers)
+        external_calls = calls_in_doc - defs_in_doc
+        calls_str = f"\n⚡ Calls: {', '.join(sorted(external_calls))}" if external_calls else ""
+
         parts.append(
-            f"[{idx}] {doc.get('title', 'Untitled')}{type_tag}{flag}{score_str}"
-            f"{hooks_str}{keywords_str}{context_str}\n{text}"
+            f"[{idx}] {doc.get('title', 'Untitled')}{type_tag}{flag}{auto_tag}{score_str}"
+            f"{hooks_str}{keywords_str}{calls_str}{context_str}\n{text}"
+        )
+
+    # Warn about helper functions called but not defined in any result
+    missing = all_called - all_defined
+    if missing:
+        parts.append(
+            f"⚠️ HELPERS CALLED BUT NOT IN RESULTS: {', '.join(sorted(missing))}\n"
+            "→ Search for these by name in Round 2 before writing code! "
+            "NEVER write a new helper when one already exists."
         )
 
     return "\n\n---\n\n".join(parts)

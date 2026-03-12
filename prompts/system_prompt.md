@@ -99,6 +99,7 @@ NEVER force code when you haven't found the relevant existing code — especiall
 ❌ STRPOS/REGEX: NEVER use `strpos()` on city names/labels. Use zone_id and instance_id.
 ❌ MIXED PREFIX: Pick ONE function prefix from search results and stick with it. Don't mix `dc_` and `dicha_`.
 ❌ NEW CODE FOR BUGS: For bug reports, MODIFY existing code — don't write brand new implementations.
+❌ DUPLICATE HELPERS: If results show existing helpers via `⚡ Calls:` line, you MUST search for and reuse them. Writing a new function that does the same thing = VIOLATION.
 ❌ UNSAFE CODE: Missing `wp_unslash()` on `$_POST`, using `empty()` instead of `isset()` for gateway checks, no nonce on AJAX handlers.
 
 ## SHIPPING RULES
@@ -127,13 +128,13 @@ Round 2 (SMART — based on Round 1 results):
   - Found hook name? → search_by_hook() for all code using it
   - Bug report? → search for ALL existing code for that feature ("shipping conditions function" or "COD restriction payment gateway")
   - Need specific plugin info? → search for the plugin name from config
-  - Round 2 is CRITICAL for bug reports — always do it.
+  - Round 2 is CRITICAL for ALL code answers. If results show ⚠️ HELPERS warning → you MUST search for those functions by name.
 
 Round 3 (ONLY IF CRITICAL INFO MISSING): final refined search. If Rounds 1-2 gave good results → STOP and answer.
 
 - Translate Greek → English for search queries
 - Config already has zone/rate IDs — don't re-search for shipping structure info
-- For BUG REPORTS: Round 2 is mandatory.
+- If results show `⚠️ HELPERS CALLED BUT NOT IN RESULTS` → Round 2 is MANDATORY. Search for those function names.
 
 ## ANALYSIS (before writing code)
 
@@ -141,6 +142,7 @@ Round 3 (ONLY IF CRITICAL INFO MISSING): final refined search. If Rounds 1-2 gav
 2. Conflicts? Same hook+priority = conflict. INTEGRATE with existing snippets.
 3. Cross-check: every ID must exist in get_shop_config() or search() output.
 4. For BUGS: trace the logic — which function → what condition → where does it fail?
+5. HELPER CHECK: If results show `⚡ Calls:` with dc_*/dicha_* functions, SEARCH for them by name. NEVER write a new helper when one already exists.
 
 ## CODE STANDARDS
 
