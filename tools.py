@@ -216,7 +216,11 @@ def get_shop_config() -> str:
 
 
 def _format_config(data: dict) -> str:
-    """Format project context as readable text."""
+    """Format project context as readable text.
+
+    Shipping zones are classified into types (MAINLAND, ISLANDS, etc.)
+    and shown compactly to save tokens while preserving all IDs.
+    """
     project = data.get("project") or {}
     if not project:
         return "No shop data synced yet. Run a sync from the WP plugin first."
@@ -237,51 +241,111 @@ def _format_config(data: dict) -> str:
         for g in gateways:
             parts.append(f"- {g.get('title')} ({g.get('gateway_id')})")
 
-    # Shipping methods (enabled only) — grouped by zone with zone_id
+    # Shipping methods (enabled only) — smart grouping by zone type
     methods = [m for m in (data.get("shipping_methods") or []) if m.get("enabled")]
     if methods:
         parts.append(f"\n=== Shipping Methods ({len(methods)} enabled) ===")
-        # Group by (zone_id, zone_name) for unambiguous zone identification
+
+        # Group by (zone_id, zone_name)
         zones: dict[tuple, list] = {}
         for m in methods:
             zone_id = m.get("zone_id", 0)
             zone_name = m.get("zone_name", "Unknown")
             zones.setdefault((zone_id, zone_name), []).append(m)
-        for (zone_id, zone_name), zone_methods in zones.items():
-            method_strs = []
-            for m in zone_methods:
-                title = m.get("method_title", "?")
-                method_id = m.get("method_id", "?")
-                instance_id = m.get("instance_id", "?")
-                # Show cost for flat_rate, min_amount for free_shipping
-                extras = []
-                if method_id == "free_shipping":
-                    min_amt = m.get("min_amount")
-                    requires = m.get("requires")
-                    if min_amt:
-                        extras.append(f"min={min_amt}")
-                    if requires:
-                        extras.append(f"requires={requires}")
-                else:
-                    cost = m.get("cost")
-                    if cost:
-                        extras.append(f"cost={cost}")
-                extra_str = f" {' '.join(extras)}" if extras else ""
-                method_strs.append(f"{method_id}:{instance_id} \"{title}\"{extra_str}")
-            parts.append(f"[zone {zone_id}: {zone_name}]: {', '.join(method_strs)}")
 
-        # Free shipping summary — group by zone-name keyword for clarity
+        # Classify zones into types for better agent understanding
+        classified: dict[str, list[tuple]] = {
+            "THESSALONIKI": [],
+            "ATHENS": [],
+            "MAINLAND": [],
+            "ISLANDS": [],
+            "OTHER": [],
+        }
+        for (zone_id, zone_name), zone_methods in zones.items():
+            name_lower = zone_name.lower()
+            has_free = any(m.get("method_id") == "free_shipping" for m in zone_methods)
+            if "θεσσαλονίκη" in name_lower:
+                classified["THESSALONIKI"].append((zone_id, zone_name, zone_methods))
+            elif "αθήνα" in name_lower or "πειραι" in name_lower or "αττικ" in name_lower:
+                classified["ATHENS"].append((zone_id, zone_name, zone_methods))
+            elif has_free:
+                classified["MAINLAND"].append((zone_id, zone_name, zone_methods))
+            elif zone_id == 0:
+                classified["OTHER"].append((zone_id, zone_name, zone_methods))
+            else:
+                # Islands or zones without free shipping
+                classified["ISLANDS"].append((zone_id, zone_name, zone_methods))
+
+        # Collect all shipping class slugs across all flat_rate methods
+        all_class_slugs: set[str] = set()
+        sample_class_costs: dict[str, str] = {}
+        for m in methods:
+            class_costs = m.get("class_costs")
+            if class_costs and isinstance(class_costs, (dict, str)):
+                costs = json.loads(class_costs) if isinstance(class_costs, str) else class_costs
+                for slug, cost_formula in costs.items():
+                    all_class_slugs.add(slug)
+                    if slug not in sample_class_costs:
+                        sample_class_costs[slug] = str(cost_formula)
+
+        # Show shipping classes summary if any exist
+        if all_class_slugs:
+            parts.append("\n--- Shipping Classes (used in flat_rate class_costs) ---")
+            for slug in sorted(all_class_slugs):
+                sample = sample_class_costs.get(slug, "")
+                parts.append(f"  {slug}: e.g. {sample}")
+
+        # Show each zone type with its zones (compact — no class_costs per zone)
+        for zone_type, zone_list in classified.items():
+            if not zone_list:
+                continue
+            parts.append(f"\n--- {zone_type} ZONES ---")
+            for zone_id, zone_name, zone_methods in zone_list:
+                method_strs = []
+                for m in zone_methods:
+                    method_id = m.get("method_id", "?")
+                    instance_id = m.get("instance_id", "?")
+                    extras = []
+                    if method_id == "free_shipping":
+                        min_amt = m.get("min_amount")
+                        requires = m.get("requires")
+                        if min_amt:
+                            extras.append(f"min={min_amt}€")
+                        if requires:
+                            extras.append(f"req={requires}")
+                    else:
+                        cost = m.get("cost")
+                        has_classes = bool(m.get("class_costs"))
+                        if cost:
+                            extras.append(f"cost={cost}")
+                        if has_classes:
+                            extras.append("[has_class_costs]")
+                        no_class = m.get("no_class_cost")
+                        if no_class and method_id == "flat_rate":
+                            extras.append(f"no_class={no_class}")
+                    # Show tax status if not the default 'taxable'
+                    tax_status = m.get("tax_status", "taxable")
+                    if tax_status and tax_status != "taxable":
+                        extras.append(f"tax={tax_status}")
+                    extra_str = f" {' '.join(extras)}" if extras else ""
+                    method_strs.append(f"{method_id}:{instance_id}{extra_str}")
+                parts.append(f"  [zone {zone_id}: {zone_name}]: {', '.join(method_strs)}")
+
+        # Free shipping compact summary — grouped by threshold
         free_methods = [m for m in methods if m.get("method_id") == "free_shipping"]
         if free_methods:
-            parts.append("\n--- Free Shipping Summary (use these IDs in PHP) ---")
-            # List each free_shipping with zone, threshold for unambiguous reference
-            for m in sorted(free_methods, key=lambda x: str(x.get("zone_name", ""))):
-                instance_id = m.get("instance_id", "?")
+            parts.append("\n--- Free Shipping IDs (for PHP code) ---")
+            # Group by min_amount for compact display
+            by_threshold: dict[str, list[str]] = {}
+            for m in free_methods:
+                min_amt = str(m.get("min_amount", "0"))
+                instance_id = str(m.get("instance_id", "?"))
                 zone_name = m.get("zone_name", "?")
-                min_amt = m.get("min_amount", "?")
-                requires = m.get("requires", "")
-                req_str = f" requires={requires}" if requires else ""
-                parts.append(f"  free_shipping:{instance_id} → zone \"{zone_name}\" min={min_amt}€{req_str}")
+                by_threshold.setdefault(min_amt, []).append(
+                    f"{instance_id}({zone_name})"
+                )
+            for threshold, instances in sorted(by_threshold.items()):
+                parts.append(f"  min={threshold}€: {', '.join(instances)}")
 
     # Tax
     tax = data.get("tax_settings") or {}
@@ -327,9 +391,20 @@ def _format_results(results: list[dict]) -> str:
 
     Smart truncation: high-relevance results get full body,
     medium gets truncated, noise (< 0.1) is dropped entirely.
+    Warns when top results have low relevance to guide re-search.
     """
     parts = []
     idx = 0
+
+    # Warn agent when top results are low-relevance → guide re-search
+    top_scores = [d.get("relevance_score", 1.0) for d in results[:3]]
+    if top_scores and max(top_scores) < 0.3:
+        parts.append(
+            "⚠️ LOW RELEVANCE: Top results scored < 0.3. Consider: "
+            "(1) remove category filter, (2) try different English synonyms, "
+            "(3) search_by_hook() if you know the hook name."
+        )
+
     for doc in results:
         score = doc.get("relevance_score")
 
@@ -351,6 +426,10 @@ def _format_results(results: list[dict]) -> str:
         score_str = f" (relevance: {score})" if score is not None else ""
         hooks = doc.get("hooks") or []
         hooks_str = f"\nHooks: {', '.join(hooks)}" if hooks else ""
+        # Show keywords from metadata for extra context
+        meta = doc.get("metadata") or {}
+        keywords = meta.get("keywords") if isinstance(meta, dict) else []
+        keywords_str = f"\nKeywords: {', '.join(keywords[:8])}" if keywords else ""
         context = doc.get("context_text", "")
         context_str = f"\nContext: {context}" if context else ""
         text = doc.get("body") or doc.get("text") or ""
@@ -359,7 +438,7 @@ def _format_results(results: list[dict]) -> str:
 
         parts.append(
             f"[{idx}] {doc.get('title', 'Untitled')}{type_tag}{flag}{score_str}"
-            f"{hooks_str}{context_str}\n{text}"
+            f"{hooks_str}{keywords_str}{context_str}\n{text}"
         )
 
     return "\n\n---\n\n".join(parts)
@@ -372,15 +451,28 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "search",
-            "description": "Search ALL project knowledge: code snippets, functions.php, theme files, company guides, and project docs. Returns mixed results. Always query in English.",
+            "description": (
+                "Search ALL project knowledge: code snippets, functions.php, theme files, "
+                "company guides, and project docs. Always query in English. "
+                "Tips: use function names from get_shop_config results as queries, "
+                "try without category first if results are poor, "
+                "search for 'dc_' prefix functions by name."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Search query in English"},
+                    "query": {
+                        "type": "string",
+                        "description": (
+                            "Search query in English. Use specific terms: function names, "
+                            "hook names, or feature descriptions. "
+                            "Example: 'free shipping threshold override' or 'dc_hide_cod_for_backorders'"
+                        ),
+                    },
                     "category": {
                         "type": "string",
                         "enum": ["shipping", "payments", "checkout", "cart", "tax", "products", "orders", "emails", "theme", "security", "performance", "general"],
-                        "description": "Optional category filter",
+                        "description": "Optional filter. Omit for broader results. Use when you know the exact domain.",
                     },
                 },
                 "required": ["query"],
@@ -391,11 +483,11 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "search_by_hook",
-            "description": "Find code using a specific WP/WC hook. GIN index lookup — exact hook name required.",
+            "description": "Find code using a specific WP/WC hook. GIN index lookup — exact hook name required. Use when you know the hook from search results or WC documentation.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "hook_name": {"type": "string", "description": "Exact hook/filter name"},
+                    "hook_name": {"type": "string", "description": "Exact hook/filter name, e.g. 'woocommerce_package_rates' or 'woocommerce_available_payment_gateways'"},
                 },
                 "required": ["hook_name"],
             },
@@ -405,7 +497,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "get_shop_config",
-            "description": "Get shop config: versions, theme, plugins, gateways, shipping, tax, settings.",
+            "description": "Get shop config: versions, theme, plugins, gateways, shipping zones/methods with IDs, tax, settings. Call FIRST to get real IDs before searching.",
             "parameters": {
                 "type": "object",
                 "properties": {},

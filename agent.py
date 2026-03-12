@@ -55,6 +55,10 @@ def _compress_old_tool_results(messages: list[dict]) -> None:
     those results for its answer.  Only compresses tool messages whose
     content is longer than a small threshold — tiny results aren't worth
     touching.
+
+    Preserves first 300 chars of each result (titles, function names, IDs)
+    instead of replacing with a generic placeholder — critical for multi-turn
+    where later rounds need to reference earlier findings.
     """
     # Find the index of the last assistant message that has tool_calls.
     # Everything BEFORE that round is "old" and can be compressed.
@@ -69,11 +73,16 @@ def _compress_old_tool_results(messages: list[dict]) -> None:
         return  # no tool calls at all
 
     # Compress tool results that appear BEFORE last_tc_idx
-    _MIN_CHARS = 200  # don't bother compressing tiny results
+    _MIN_CHARS = 200     # don't bother compressing tiny results
+    _SUMMARY_CHARS = 300  # keep first 300 chars (titles, function names, IDs)
     for idx in range(1, last_tc_idx):
         msg = messages[idx]
-        if msg.get("role") == "tool" and len(msg.get("content", "")) > _MIN_CHARS:
-            msg["content"] = "[previous search result — see assistant summary above]"
+        content = msg.get("content", "")
+        if msg.get("role") == "tool" and len(content) > _MIN_CHARS:
+            summary = content[:_SUMMARY_CHARS]
+            if len(content) > _SUMMARY_CHARS:
+                summary += "\n... [compressed — full result was in earlier round]"
+            msg["content"] = summary
 
 
 def _count_tokens(messages: list[dict], model: str) -> int:
