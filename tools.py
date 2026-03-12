@@ -1,15 +1,14 @@
 """
-tools.py — WooCommerce AI Agent tools (v2)
+tools.py — WooCommerce AI Agent tools (v3)
 
 Architecture:
-  - search_code()          → Hybrid search on project code (snippets, functions.php, theme files)
-  - search_docs()          → Hybrid search on documentation (company + project docs)
+  - search()               → Unified hybrid search on ALL content (code + docs + guides)
   - search_by_hook()       → Direct hook lookup via GIN index
   - get_shop_config()      → Structured project context (plugins, shipping, payments, tax)
   - _rerank()              → Cohere reranker for top-K refinement
 
 Search pipeline:
-  1. Hybrid search (vector + weighted FTS + RRF) → 30 candidates
+  1. Hybrid search (vector + weighted FTS + RRF) → 30 candidates (all doc types)
   2. Rerank (Cohere cross-encoder) → top 5
   3. Parent expansion (SQL-side) → full context
 """
@@ -63,7 +62,7 @@ def _rpc(function_name: str, payload: dict) -> dict | list:
         return {"error": str(e)}
 
 
-def _embed_query(query: str, category: str = "", doc_types: list[str] | None = None) -> list[float]:
+def _embed_query(query: str, category: str = "") -> list[float]:
     """Embed a search query with enrichment to match document embeddings.
 
     Documents are embedded as '[category] [type] CONTEXT: ... Title: ... CONTENT: ...'
@@ -72,8 +71,6 @@ def _embed_query(query: str, category: str = "", doc_types: list[str] | None = N
     parts = []
     if category:
         parts.append(f"[{category}]")
-    if doc_types and len(doc_types) == 1:
-        parts.append(f"[{doc_types[0]}]")
     parts.append(f"QUERY: {query}")
     enriched = " ".join(parts)
 
@@ -120,20 +117,17 @@ def _rerank(query: str, documents: list[dict], top_n: int = 5) -> list[dict]:
         return documents[:top_n]
 
 
-# -- Tool: search_code ------------------------------------------------
+# -- Tool: search (unified) -------------------------------------------
 
-_CODE_DOC_TYPES = ["code_snippet", "functions_php", "theme_file"]
-_DOCS_DOC_TYPES = ["company_doc", "project_doc"]
+def search(query: str, category: str = "") -> str:
+    """Search all project knowledge: code, company guides, project docs.
 
-
-def search_code(query: str, category: str = "") -> str:
-    """Search project code: snippets, functions.php, theme files.
-
-    Uses hybrid search (vector + weighted FTS + RRF) → rerank → top 5.
-    Optional category filter narrows results.
+    Uses hybrid search (vector + weighted FTS + RRF) across ALL document
+    types — code snippets, functions.php, theme files, company docs,
+    and project docs. Global company docs are always included.
     """
     try:
-        embedding = _embed_query(query, category, doc_types=_CODE_DOC_TYPES)
+        embedding = _embed_query(query, category)
     except Exception as e:
         return f"ERROR generating embedding: {e}"
 
@@ -142,8 +136,7 @@ def search_code(query: str, category: str = "") -> str:
         "query_embedding": embedding,
         "match_count": 30,
         "p_project_id": config.get_project_id(),
-
-        "p_doc_types": _CODE_DOC_TYPES,
+        # p_doc_types NOT sent → NULL → searches ALL types
     }
     if category:
         payload["p_category"] = category
@@ -152,45 +145,10 @@ def search_code(query: str, category: str = "") -> str:
     if isinstance(result, dict) and "error" in result:
         return f"ERROR: {result['error']}"
     if not result:
-        return "No code results found. RETRY: try without category filter, or use different English search terms/synonyms."
+        return "No results found. RETRY: try without category filter, or use different English search terms/synonyms."
 
-    # Rerank
-    reranked = _rerank(query, result, top_n=3)
-
-    return _format_results(reranked)
-
-
-# -- Tool: search_docs ------------------------------------------------
-
-def search_docs(query: str, category: str = "") -> str:
-    """Search documentation: company guides + project-specific docs.
-
-    Searches global docs + current project docs combined.
-    """
-    try:
-        embedding = _embed_query(query, category, doc_types=_DOCS_DOC_TYPES)
-    except Exception as e:
-        return f"ERROR generating embedding: {e}"
-
-    payload: dict = {
-        "query_text": query,
-        "query_embedding": embedding,
-        "match_count": 30,
-        "p_project_id": config.get_project_id(),
-
-        "p_doc_types": _DOCS_DOC_TYPES,
-    }
-    if category:
-        payload["p_category"] = category
-
-    result = _rpc("hybrid_search", payload)
-    if isinstance(result, dict) and "error" in result:
-        return f"ERROR: {result['error']}"
-    if not result:
-        return "No documentation found. RETRY: try without category filter, use synonyms, or broaden the English search terms."
-
-    # Rerank
-    reranked = _rerank(query, result, top_n=3)
+    # Rerank — top 5 for mixed code+docs results
+    reranked = _rerank(query, result, top_n=5)
 
     return _format_results(reranked)
 
@@ -218,8 +176,8 @@ def search_by_hook(hook_name: str) -> str:
         active = doc.get("is_active")
         flag = " [ACTIVE]" if active else " [INACTIVE]" if active is False else ""
         text = doc.get("body") or doc.get("text") or ""
-        if len(text) > _BODY_MAX_CHARS:
-            text = text[:_BODY_MAX_CHARS] + "\n... [truncated]"
+        if len(text) > _BODY_HIGH:
+            text = text[:_BODY_HIGH] + "\n... [truncated]"
         parts.append(
             f"[{i}] {doc.get('title', 'Untitled')}{flag}\n"
             f"Hooks: {', '.join(hooks)}\n{text}"
@@ -292,9 +250,11 @@ def _format_config(data: dict) -> str:
             method_strs = []
             for m in zone_methods:
                 title = m.get("method_title", "?")
+                method_id = m.get("method_id", "?")
+                instance_id = m.get("instance_id", "?")
                 cost = m.get("cost")
-                cost_str = f" ({cost})" if cost else ""
-                method_strs.append(f"{title}{cost_str}")
+                cost_str = f" cost={cost}" if cost else ""
+                method_strs.append(f"{method_id}:{instance_id} \"{title}\"{cost_str}")
             parts.append(f"[{zone_name}]: {', '.join(method_strs)}")
 
     # Tax
@@ -358,6 +318,8 @@ def _format_results(results: list[dict]) -> str:
             max_chars = _BODY_HIGH
 
         idx += 1
+        doc_type = doc.get("doc_type") or doc.get("type", "")
+        type_tag = f" [{doc_type}]" if doc_type else ""
         active = doc.get("is_active")
         flag = " [ACTIVE]" if active else " [INACTIVE]" if active is False else ""
         score_str = f" (relevance: {score})" if score is not None else ""
@@ -370,7 +332,7 @@ def _format_results(results: list[dict]) -> str:
             text = text[:max_chars] + "\n... [truncated]"
 
         parts.append(
-            f"[{idx}] {doc.get('title', 'Untitled')}{flag}{score_str}"
+            f"[{idx}] {doc.get('title', 'Untitled')}{type_tag}{flag}{score_str}"
             f"{hooks_str}{context_str}\n{text}"
         )
 
@@ -383,27 +345,8 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
-            "name": "search_code",
-            "description": "Search project code: snippets, functions.php, theme files. Hybrid vector+keyword search. Always query in English.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Search query in English"},
-                    "category": {
-                        "type": "string",
-                        "enum": ["shipping", "payments", "checkout", "cart", "tax", "products", "orders", "emails", "theme", "security", "performance", "general"],
-                        "description": "Optional category filter",
-                    },
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_docs",
-            "description": "Search documentation: company guides, how-tos, project notes. Always query in English.",
+            "name": "search",
+            "description": "Search ALL project knowledge: code snippets, functions.php, theme files, company guides, and project docs. Returns mixed results. Always query in English.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -450,8 +393,7 @@ TOOL_SCHEMAS = [
 # -- Dispatch ---------------------------------------------------------
 
 _TOOL_MAP = {
-    "search_code": search_code,
-    "search_docs": search_docs,
+    "search": search,
     "search_by_hook": search_by_hook,
     "get_shop_config": get_shop_config,
 }
