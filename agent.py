@@ -1,5 +1,4 @@
 import json
-import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Iterator
 
@@ -10,12 +9,15 @@ from rich.console import Console
 import config
 from tools import TOOL_SCHEMAS, call_tool
 
+# NOTE: _select_model routing removed — gpt-5-mini is cheap enough for all queries.
+
 _client  = OpenAI(api_key=config.OPENAI_API_KEY)
 _console = Console(stderr=True)  # tool notifications go to stderr
 
 # ── Pricing (USD per 1M tokens) ───────────────────────────────────────────────
 
 _MODEL_PRICING = {
+    "gpt-5-mini":   {"input": 0.25,  "output": 2.00},
     "gpt-4.1":      {"input": 2.00,  "output": 8.00},
     "gpt-4.1-mini": {"input": 0.40,  "output": 1.60},
     "gpt-4o":       {"input": 2.50,  "output": 10.00},
@@ -35,37 +37,15 @@ def _add_usage(usage: dict, prompt_tokens: int, completion_tokens: int, model: s
 # ── Context window management ─────────────────────────────────────────────────
 
 _CONTEXT_LIMITS = {
+    "gpt-5-mini":   380_000,
     "gpt-4.1":      950_000,
     "gpt-4.1-mini": 950_000,
     "gpt-4o":       120_000,
     "gpt-4o-mini":  120_000,
 }
 _RESPONSE_BUFFER = 8_000
-_MAX_TOOL_ROUNDS = 2
-
-# ── Conservative model routing ────────────────────────────────────────────────
-# Mini ONLY for trivial factual lookups (version, plugin list, theme name).
-# Everything else (code, debug, explanation, implementation) → full model.
-
-_SIMPLE_PATTERNS = [
-    r"(?:τι|ποιο|ποια|ποιος|ποιες|ποια|what|which)\s.{0,20}(?:version|έκδοση|theme|θέμα|php)",
-    r"(?:τι|ποιο|what)\s.{0,10}(?:woocommerce|wordpress|wp|wc)",
-    r"(?:πόσα|πόσες|πόσοι|how many)\s.{0,20}(?:plugin|order|product|προϊόν)",
-    r"(?:ποια|ποιες|list|λίστα|δείξε|show)\s.{0,20}(?:plugin|gateway|πύλ)",
-    r"(?:ενεργ|active|enabled)\s.{0,20}(?:plugin|gateway|method|μέθοδο)",
-    r"(?:τρέχει|runs?|using)\s.{0,15}(?:version|php|wc|wp)",
-]
-
-
-def _select_model(user_message: str) -> str:
-    """Route trivial lookups to mini, everything else to full model."""
-    msg_lower = user_message.lower().strip()
-    # Short messages that match simple patterns → mini
-    if len(msg_lower) < 80:
-        for pattern in _SIMPLE_PATTERNS:
-            if re.search(pattern, msg_lower):
-                return config.MODEL_MINI
-    return config.MODEL
+_MAX_TOOL_ROUNDS = 3
+_MAX_CALLS_PER_ROUND = 4
 
 
 def _compress_old_tool_results(messages: list[dict]) -> None:
@@ -170,16 +150,7 @@ def run_agent(messages: list[dict], usage: dict | None = None, model: str | None
     - usage: optional mutable dict updated in-place with token counts and cost
     - model: optional model override (defaults to config.MODEL)
     """
-    # Smart model routing: use mini for trivial lookups, full for everything else
-    if model:
-        active_model = model
-    else:
-        last_user_msg = ""
-        for msg in reversed(messages):
-            if msg.get("role") == "user":
-                last_user_msg = msg.get("content", "")
-                break
-        active_model = _select_model(last_user_msg)
+    active_model = model or config.MODEL
 
     if usage is not None:
         usage["model"] = active_model
@@ -212,18 +183,14 @@ def run_agent(messages: list[dict], usage: dict | None = None, model: str | None
                 if tc.function.name not in usage["tools_used"]:
                     usage["tools_used"].append(tc.function.name)
 
-        # No tool calls → this IS the final answer, stream it directly
+        # No tool calls → this IS the final answer
         if not message.tool_calls:
-            # Stream the same final turn (no second API call — use the content we got)
-            # We stream by yielding the content we already have from the non-streaming call,
-            # since we've already paid for it. No duplicate API call.
             content = message.content or ""
             messages.append({"role": "assistant", "content": content})
             yield content
             return
 
-        # Cap tool calls per round to avoid token explosion (model sometimes fires 5+ searches)
-        _MAX_CALLS_PER_ROUND = 3
+        # Cap tool calls per round
         tool_calls = message.tool_calls[:_MAX_CALLS_PER_ROUND]
         if len(message.tool_calls) > _MAX_CALLS_PER_ROUND:
             _console.print(
@@ -262,4 +229,3 @@ def run_agent(messages: list[dict], usage: dict | None = None, model: str | None
         if tool_rounds >= _MAX_TOOL_ROUNDS:
             _console.print(f"  [dim][[limit]][/dim] [yellow]Max {_MAX_TOOL_ROUNDS} tool rounds reached — forcing answer[/yellow]", highlight=False)
             messages.append({"role": "user", "content": "You have used all available search rounds. Answer NOW with what you have. Do NOT call any more tools."})
-

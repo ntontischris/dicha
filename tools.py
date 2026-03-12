@@ -8,8 +8,8 @@ Architecture:
   - _rerank()              → Cohere reranker for top-K refinement
 
 Search pipeline:
-  1. Hybrid search (vector + weighted FTS + RRF) → 30 candidates (all doc types)
-  2. Rerank (Cohere cross-encoder) → top 5
+  1. Hybrid search (vector + weighted FTS + RRF) → 40 candidates (all doc types)
+  2. Rerank (Cohere cross-encoder) → top 8
   3. Parent expansion (SQL-side) → full context
 """
 
@@ -134,7 +134,7 @@ def search(query: str, category: str = "") -> str:
     payload: dict = {
         "query_text": query,
         "query_embedding": embedding,
-        "match_count": 30,
+        "match_count": 40,
         "p_project_id": config.get_project_id(),
         # p_doc_types NOT sent → NULL → searches ALL types
     }
@@ -147,8 +147,8 @@ def search(query: str, category: str = "") -> str:
     if not result:
         return "No results found. RETRY: try without category filter, or use different English search terms/synonyms."
 
-    # Rerank — top 5 for mixed code+docs results
-    reranked = _rerank(query, result, top_n=5)
+    # Rerank — top 8 for richer context (gpt-5-mini cost allows more data)
+    reranked = _rerank(query, result, top_n=8)
 
     return _format_results(reranked)
 
@@ -237,25 +237,51 @@ def _format_config(data: dict) -> str:
         for g in gateways:
             parts.append(f"- {g.get('title')} ({g.get('gateway_id')})")
 
-    # Shipping methods (enabled only) — grouped by zone for brevity
+    # Shipping methods (enabled only) — grouped by zone with zone_id
     methods = [m for m in (data.get("shipping_methods") or []) if m.get("enabled")]
     if methods:
         parts.append(f"\n=== Shipping Methods ({len(methods)} enabled) ===")
-        # Group by zone
-        zones: dict[str, list] = {}
+        # Group by (zone_id, zone_name) for unambiguous zone identification
+        zones: dict[tuple, list] = {}
         for m in methods:
-            zone = m.get("zone_name", "Unknown")
-            zones.setdefault(zone, []).append(m)
-        for zone_name, zone_methods in zones.items():
+            zone_id = m.get("zone_id", 0)
+            zone_name = m.get("zone_name", "Unknown")
+            zones.setdefault((zone_id, zone_name), []).append(m)
+        for (zone_id, zone_name), zone_methods in zones.items():
             method_strs = []
             for m in zone_methods:
                 title = m.get("method_title", "?")
                 method_id = m.get("method_id", "?")
                 instance_id = m.get("instance_id", "?")
-                cost = m.get("cost")
-                cost_str = f" cost={cost}" if cost else ""
-                method_strs.append(f"{method_id}:{instance_id} \"{title}\"{cost_str}")
-            parts.append(f"[{zone_name}]: {', '.join(method_strs)}")
+                # Show cost for flat_rate, min_amount for free_shipping
+                extras = []
+                if method_id == "free_shipping":
+                    min_amt = m.get("min_amount")
+                    requires = m.get("requires")
+                    if min_amt:
+                        extras.append(f"min={min_amt}")
+                    if requires:
+                        extras.append(f"requires={requires}")
+                else:
+                    cost = m.get("cost")
+                    if cost:
+                        extras.append(f"cost={cost}")
+                extra_str = f" {' '.join(extras)}" if extras else ""
+                method_strs.append(f"{method_id}:{instance_id} \"{title}\"{extra_str}")
+            parts.append(f"[zone {zone_id}: {zone_name}]: {', '.join(method_strs)}")
+
+        # Free shipping summary — group by zone-name keyword for clarity
+        free_methods = [m for m in methods if m.get("method_id") == "free_shipping"]
+        if free_methods:
+            parts.append("\n--- Free Shipping Summary (use these IDs in PHP) ---")
+            # List each free_shipping with zone, threshold for unambiguous reference
+            for m in sorted(free_methods, key=lambda x: str(x.get("zone_name", ""))):
+                instance_id = m.get("instance_id", "?")
+                zone_name = m.get("zone_name", "?")
+                min_amt = m.get("min_amount", "?")
+                requires = m.get("requires", "")
+                req_str = f" requires={requires}" if requires else ""
+                parts.append(f"  free_shipping:{instance_id} → zone \"{zone_name}\" min={min_amt}€{req_str}")
 
     # Tax
     tax = data.get("tax_settings") or {}
@@ -291,8 +317,8 @@ def _format_config(data: dict) -> str:
 
 # -- Formatting -------------------------------------------------------
 
-_BODY_HIGH = 3000    # relevance >= 0.5 → full body
-_BODY_MEDIUM = 1500  # relevance 0.2-0.5 → truncated body
+_BODY_HIGH = 4000    # relevance >= 0.5 → full body
+_BODY_MEDIUM = 2500  # relevance 0.2-0.5 → truncated body
 _NOISE_THRESHOLD = 0.1  # relevance < 0.1 → drop entirely
 
 
