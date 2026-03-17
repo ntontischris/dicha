@@ -8,9 +8,9 @@ Architecture:
   - _rerank()              → Cohere reranker for top-K refinement
 
 Search pipeline:
-  1. Hybrid search (vector + weighted FTS + RRF) → 40 candidates (all doc types)
-  2. Rerank (Cohere cross-encoder) → top 8
-  3. Parent expansion (SQL-side) → full context
+  1. Hybrid search (vector + weighted FTS + RRF) → 25 candidates (all doc types)
+  2. Rerank (Cohere cross-encoder) → top 5
+  3. Progressive disclosure: QUICK_REF + summary + top 2-3 full code
 """
 
 import json
@@ -63,12 +63,25 @@ def _rpc(function_name: str, payload: dict) -> dict | list:
         return {"error": str(e)}
 
 
+_embedding_cache: dict[str, tuple[list[float], float]] = {}
+_EMBEDDING_CACHE_TTL = 3600.0
+_EMBEDDING_CACHE_MAX = 500
+
+
 def _embed_query(query: str, category: str = "") -> list[float]:
-    """Embed a search query with enrichment to match document embeddings.
+    """Embed a search query with enrichment and caching.
 
     Documents are embedded as '[category] [type] CONTEXT: ... Title: ... CONTENT: ...'
     so queries need similar structure for better cosine similarity alignment.
     """
+    cache_key = f"{category}:{query.strip().lower()}"
+    now = time.monotonic()
+
+    if cache_key in _embedding_cache:
+        embedding, ts = _embedding_cache[cache_key]
+        if now - ts < _EMBEDDING_CACHE_TTL:
+            return embedding
+
     parts = []
     if category:
         parts.append(f"[{category}]")
@@ -80,7 +93,15 @@ def _embed_query(query: str, category: str = "") -> list[float]:
         input=enriched,
         dimensions=1536,
     )
-    return response.data[0].embedding
+    embedding = response.data[0].embedding
+
+    # Cache with size limit
+    if len(_embedding_cache) >= _EMBEDDING_CACHE_MAX:
+        oldest_key = min(_embedding_cache, key=lambda k: _embedding_cache[k][1])
+        del _embedding_cache[oldest_key]
+    _embedding_cache[cache_key] = (embedding, now)
+
+    return embedding
 
 
 # -- Reranker ---------------------------------------------------------
@@ -120,57 +141,6 @@ def _rerank(query: str, documents: list[dict], top_n: int = 5) -> list[dict]:
 
 # -- Tool: search (unified) -------------------------------------------
 
-def _resolve_helpers(results: list[dict], project_id: str) -> list[dict]:
-    """Auto-fetch helper functions called but not defined in results.
-
-    Scans result bodies for dc_*/dicha_* function calls, checks which
-    ones are NOT defined in any result, and fetches the missing definitions
-    one by one. Each search is cheap (~$0.0001 embedding + 1 Supabase call).
-    """
-    all_called: set[str] = set()
-    all_defined: set[str] = set()
-
-    for doc in results:
-        body = doc.get("body") or doc.get("text") or ""
-        all_called.update(_FUNC_CALL_RE.findall(body))
-        all_defined.update(_FUNC_DEF_RE.findall(body))
-
-    missing = all_called - all_defined
-    if not missing:
-        return results
-
-    existing_ids = {doc.get("id") for doc in results}
-    # Search each missing function individually for precise results.
-    # Limit to 5 helpers to cap cost and latency.
-    for func_name in sorted(missing)[:5]:
-        try:
-            embedding = _embed_query(func_name)
-        except Exception:
-            continue
-
-        helper_results = _rpc("hybrid_search", {
-            "query_text": func_name,
-            "query_embedding": embedding,
-            "match_count": 3,
-            "p_project_id": project_id,
-        })
-
-        if not helper_results or isinstance(helper_results, dict):
-            continue
-
-        for doc in helper_results:
-            if doc.get("id") in existing_ids:
-                continue
-            body = doc.get("body") or doc.get("text") or ""
-            defs = set(_FUNC_DEF_RE.findall(body))
-            if func_name in defs:
-                doc["_auto_resolved"] = True
-                results.append(doc)
-                existing_ids.add(doc.get("id"))
-                break  # found this helper, move to next
-
-    return results
-
 
 def search(query: str, category: str = "") -> str:
     """Search all project knowledge: code, company guides, project docs.
@@ -178,19 +148,30 @@ def search(query: str, category: str = "") -> str:
     Uses hybrid search (vector + weighted FTS + RRF) across ALL document
     types — code snippets, functions.php, theme files, company docs,
     and project docs. Global company docs are always included.
-    Auto-resolves missing helper functions found in results.
+    Expands Greek terms for better retrieval. Caches results for 10 min.
     """
+    # Check cache first
+    project_id = config.get_project_id()
+    cache_key = f"{project_id}:{category}:{query.lower().strip()}"
+    now = time.monotonic()
+    if cache_key in _search_cache:
+        cached_result, ts = _search_cache[cache_key]
+        if now - ts < _SEARCH_CACHE_TTL:
+            return cached_result
+
+    # Expand Greek terms for better FTS matching
+    expanded_query = _expand_query(query)
+
     try:
         embedding = _embed_query(query, category)
     except Exception as e:
         return f"ERROR generating embedding: {e}"
 
     payload: dict = {
-        "query_text": query,
+        "query_text": expanded_query,
         "query_embedding": embedding,
-        "match_count": 40,
-        "p_project_id": config.get_project_id(),
-        # p_doc_types NOT sent → NULL → searches ALL types
+        "match_count": 25,
+        "p_project_id": project_id,
     }
     if category:
         payload["p_category"] = category
@@ -201,13 +182,24 @@ def search(query: str, category: str = "") -> str:
     if not result:
         return "No results found. RETRY: try without category filter, or use different English search terms/synonyms."
 
-    # Rerank — top 8 for richer context (gpt-5-mini cost allows more data)
-    reranked = _rerank(query, result, top_n=8)
+    # Separate: regular results vs auto-resolved dependencies
+    regular = [d for d in result if not d.get("is_dependency")]
+    deps = [d for d in result if d.get("is_dependency")]
 
-    # Auto-resolve: fetch helper function definitions called in results
-    reranked = _resolve_helpers(reranked, config.get_project_id())
+    # Rerank only regular results (dependencies are always included)
+    reranked = _rerank(query, regular, top_n=5)
 
-    return _format_results(reranked)
+    # Mark dependencies and append after regular results
+    for d in deps:
+        d["_auto_resolved"] = True
+    reranked.extend(deps)
+
+    formatted = _format_results(reranked)
+
+    # Cache the result
+    _search_cache[cache_key] = (formatted, now)
+
+    return formatted
 
 
 # -- Tool: search_by_hook ---------------------------------------------
@@ -227,7 +219,18 @@ def search_by_hook(hook_name: str) -> str:
     if not result:
         return f"No code found using hook '{hook_name}'."
 
-    parts = []
+    # QUICK_REF header
+    active_count = sum(1 for d in result if d.get("is_active"))
+    func_defs: set[str] = set()
+    for doc in result:
+        body = doc.get("body") or doc.get("text") or ""
+        func_defs.update(_FUNC_DEF_RE.findall(body))
+    header_lines = [f"QUICK_REF: {len(result)} results for hook '{hook_name}' ({active_count} active)"]
+    if func_defs:
+        header_lines.append(f"  Functions: {', '.join(sorted(func_defs)[:10])}")
+    header_lines.append("---")
+
+    parts = ["\n".join(header_lines)]
     for i, doc in enumerate(result, 1):
         hooks = doc.get("hooks") or []
         active = doc.get("is_active")
@@ -438,31 +441,127 @@ def _format_config(data: dict) -> str:
 
 # -- Formatting -------------------------------------------------------
 
-_BODY_HIGH = 4000    # relevance >= 0.5 → full body
-_BODY_MEDIUM = 2500  # relevance 0.2-0.5 → truncated body
-_NOISE_THRESHOLD = 0.1  # relevance < 0.1 → drop entirely
+_BODY_HIGH = 3000    # relevance >= 0.5 → full body
+_BODY_MEDIUM = 1500  # relevance 0.2-0.5 → truncated body
+_NOISE_THRESHOLD = 0.15  # relevance < 0.15 → drop entirely
 
 # Detect project-specific function calls and definitions in search results.
 # Used to warn the agent about helper functions it needs to search for.
 _FUNC_CALL_RE = re.compile(r"\b(dc_\w+|dicha_\w+)\s*\(")
 _FUNC_DEF_RE = re.compile(r"function\s+(dc_\w+|dicha_\w+)\s*\(")
 
+# -- Greek → English term dictionary for query expansion ----------------
+
+_GREEK_TERMS: dict[str, str] = {
+    "μεταφορικά": "shipping rates",
+    "πληρωμή": "payment",
+    "αντικαταβολή": "COD cash on delivery",
+    "κουπόνι": "coupon",
+    "δωρεάν αποστολή": "free shipping",
+    "πλακάκια": "tiles plakakia",
+    "φόρος": "tax",
+    "φπα": "VAT tax",
+    "καλάθι": "cart",
+    "παραγγελία": "order",
+    "ταμείο": "checkout",
+    "ζώνη": "zone",
+    "τιμή": "price",
+    "έκπτωση": "discount",
+    "προϊόν": "product",
+    "τιμολόγιο": "invoice",
+    "μπανιέρα": "bathtub",
+    "ντουζιέρα": "shower",
+    "αποστολή": "shipping delivery",
+    "βάρος": "weight",
+    "κατηγορία": "category",
+    "απόθεμα": "stock inventory",
+    "ειδοποίηση": "notification email",
+    "χρέωση": "charge fee surcharge",
+    "νησιά": "islands",
+    "ηπειρωτική": "mainland",
+}
+
+
+def _expand_query(query: str) -> str:
+    """Expand Greek terms and add underscore variants for FTS."""
+    expanded = query
+    query_lower = query.lower()
+    for greek, english in _GREEK_TERMS.items():
+        if greek in query_lower:
+            expanded += f" {english}"
+    # Underscore expansion for potential function names
+    words = query_lower.split()
+    if len(words) >= 2:
+        underscore = "_".join(words)
+        if any(underscore.startswith(p) for p in ("dc_", "dicha_", "free_", "flat_")):
+            expanded += f" {underscore}"
+    return expanded
+
+
+# -- Search result caching -----------------------------------------------
+
+_search_cache: dict[str, tuple[str, float]] = {}
+_SEARCH_CACHE_TTL = 600.0
+
+
+def _build_quick_ref(results: list[dict]) -> str:
+    """Build a structured QUICK_REF header that survives compression.
+
+    Contains: result count, function definitions, hooks, categories.
+    """
+    from collections import Counter
+    func_defs: set[str] = set()
+    hook_counts: Counter[str] = Counter()
+    categories: Counter[str] = Counter()
+    active_count = sum(1 for d in results if d.get("is_active"))
+
+    for doc in results:
+        body = doc.get("body") or doc.get("text") or ""
+        func_defs.update(_FUNC_DEF_RE.findall(body))
+        for h in (doc.get("hooks") or []):
+            hook_counts[h] += 1
+        cat = doc.get("category") or doc.get("doc_type") or ""
+        if cat:
+            categories[cat] += 1
+
+    lines = [f"QUICK_REF: {len(results)} results ({active_count} active)"]
+    if func_defs:
+        lines.append(f"  Functions: {', '.join(sorted(func_defs)[:10])}")
+    if hook_counts:
+        hooks_str = ", ".join(f"{h}({c})" for h, c in hook_counts.most_common(5))
+        lines.append(f"  Hooks: {hooks_str}")
+    if categories:
+        cats_str = ", ".join(f"{c}({n})" for c, n in categories.most_common(5))
+        lines.append(f"  Categories: {cats_str}")
+    lines.append("---")
+    return "\n".join(lines)
+
 
 def _format_results(results: list[dict]) -> str:
-    """Format hybrid search results for the LLM.
+    """Format hybrid search results with progressive disclosure.
 
-    Smart truncation: high-relevance results get full body,
-    medium gets truncated, noise (< 0.1) is dropped entirely.
-    Warns when top results have low relevance to guide re-search.
-    Highlights function calls per result and warns about missing helpers.
+    Tier 1 (ALL results): one-line summary each.
+    Tier 2 (top 2-3): full code.
+    QUICK_REF header at the top survives all compression tiers.
     """
-    parts = []
-    idx = 0
     all_called: set[str] = set()
     all_defined: set[str] = set()
 
-    # Warn agent when top results are low-relevance → guide re-search
-    top_scores = [d.get("relevance_score", 1.0) for d in results[:3]]
+    # Filter noise
+    filtered = [
+        d for d in results
+        if d.get("_auto_resolved") or
+        d.get("relevance_score") is None or
+        d.get("relevance_score", 0) >= _NOISE_THRESHOLD
+    ]
+    if not filtered:
+        return "No results above noise threshold."
+
+    # QUICK_REF header
+    parts = [_build_quick_ref(filtered)]
+
+    # Warn on low relevance
+    top_scores = [d.get("relevance_score", 1.0) for d in filtered[:3]]
     if top_scores and max(top_scores) < 0.3:
         parts.append(
             "⚠️ LOW RELEVANCE: Top results scored < 0.3. Consider: "
@@ -470,53 +569,71 @@ def _format_results(results: list[dict]) -> str:
             "(3) search_by_hook() if you know the hook name."
         )
 
-    for doc in results:
+    # --- Tier 1: one-line summaries for ALL results ---
+    summary_lines = ["RESULTS SUMMARY:"]
+    for i, doc in enumerate(filtered, 1):
         score = doc.get("relevance_score")
-        is_auto = doc.get("_auto_resolved", False)
-
-        # Drop noise — but never drop auto-resolved helpers
-        if not is_auto and score is not None and score < _NOISE_THRESHOLD:
-            continue
-
-        # Smart body truncation based on relevance (auto-resolved get full body)
-        if is_auto:
-            max_chars = _BODY_HIGH
-        elif score is not None and score < 0.5:
-            max_chars = _BODY_MEDIUM
-        else:
-            max_chars = _BODY_HIGH
-
-        idx += 1
-        doc_type = doc.get("doc_type") or doc.get("type", "")
-        type_tag = f" [{doc_type}]" if doc_type else ""
         active = doc.get("is_active")
         flag = " [ACTIVE]" if active else " [INACTIVE]" if active is False else ""
-        auto_tag = " [AUTO-RESOLVED HELPER — USE THIS, don't rewrite]" if is_auto else ""
+        cat = doc.get("category") or ""
+        cat_str = f" [{cat}]" if cat else ""
+        hooks = doc.get("hooks") or []
+        hooks_str = f" — {', '.join(hooks[:2])}" if hooks else ""
+        score_str = f", rel: {score}" if score is not None else ""
+        scope = doc.get("scope", "project")
+        scope_str = f" [{scope}]" if scope == "global" else ""
+        summary_lines.append(
+            f"{i}. {doc.get('title', 'Untitled')}{flag}{cat_str}{scope_str}{hooks_str}{score_str}"
+        )
+    parts.append("\n".join(summary_lines))
+
+    # --- Tier 2: full code for top results ---
+    # Determine how many to show in full based on body size
+    top_body_len = len(filtered[0].get("body") or filtered[0].get("text") or "") if filtered else 0
+    full_count = 2 if top_body_len > 3000 else 3
+
+    parts.append(f"FULL CODE (top {full_count} results):")
+
+    for i, doc in enumerate(filtered[:full_count], 1):
+        score = doc.get("relevance_score")
+        active = doc.get("is_active")
+        flag = " [ACTIVE]" if active else " [INACTIVE]" if active is False else ""
         score_str = f" (relevance: {score})" if score is not None else ""
         hooks = doc.get("hooks") or []
         hooks_str = f"\nHooks: {', '.join(hooks)}" if hooks else ""
-        # Show keywords from metadata for extra context
-        meta = doc.get("metadata") or {}
-        keywords = meta.get("keywords") if isinstance(meta, dict) else []
-        keywords_str = f"\nKeywords: {', '.join(keywords[:8])}" if keywords else ""
         context = doc.get("context_text", "")
         context_str = f"\nContext: {context}" if context else ""
-        text = doc.get("body") or doc.get("text") or ""
-        if len(text) > max_chars:
-            text = text[:max_chars] + "\n... [truncated]"
 
-        # Track function calls and definitions across all results
+        text = doc.get("body") or doc.get("text") or ""
+
+        # Track function calls and definitions
         calls_in_doc = set(_FUNC_CALL_RE.findall(text))
         defs_in_doc = set(_FUNC_DEF_RE.findall(text))
         all_called.update(calls_in_doc)
         all_defined.update(defs_in_doc)
-        # Show which project functions this code calls (helps agent find helpers)
         external_calls = calls_in_doc - defs_in_doc
-        calls_str = f"\n⚡ Calls: {', '.join(sorted(external_calls))}" if external_calls else ""
+        calls_str = f"\nCalls: {', '.join(sorted(external_calls))}" if external_calls else ""
+
+        # Smart truncation based on relevance
+        max_chars = _BODY_HIGH if (score is None or score >= 0.5) else _BODY_MEDIUM
+        if len(text) > max_chars:
+            text = text[:max_chars] + "\n... [truncated]"
 
         parts.append(
-            f"[{idx}] {doc.get('title', 'Untitled')}{type_tag}{flag}{auto_tag}{score_str}"
-            f"{hooks_str}{keywords_str}{calls_str}{context_str}\n{text}"
+            f"[{i}] {doc.get('title', 'Untitled')}{flag}{score_str}"
+            f"{hooks_str}{calls_str}{context_str}\n{text}"
+        )
+
+    # Also scan remaining results for function calls/defs (for helpers warning)
+    for doc in filtered[full_count:]:
+        body = doc.get("body") or doc.get("text") or ""
+        all_called.update(_FUNC_CALL_RE.findall(body))
+        all_defined.update(_FUNC_DEF_RE.findall(body))
+
+    if len(filtered) > full_count:
+        parts.append(
+            f"Results #{full_count + 1}-{len(filtered)} shown as summary only. "
+            "Search by function name for full code."
         )
 
     # Warn about helper functions called but not defined in any result
@@ -584,7 +701,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "get_shop_config",
-            "description": "Get shop config: versions, theme, plugins, gateways, shipping zones/methods with IDs, tax, settings. Call FIRST to get real IDs before searching.",
+            "description": "Refresh shop config if needed. Config is already in the system prompt — only call this if data seems stale or you need shipping class_costs/tax details not in the summary.",
             "parameters": {
                 "type": "object",
                 "properties": {},

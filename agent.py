@@ -1,4 +1,5 @@
 import json
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Iterator
 
@@ -8,8 +9,6 @@ from rich.console import Console
 
 import config
 from tools import TOOL_SCHEMAS, call_tool
-
-# NOTE: _select_model routing removed — gpt-5-mini is cheap enough for all queries.
 
 _client  = OpenAI(api_key=config.OPENAI_API_KEY)
 _console = Console(stderr=True)  # tool notifications go to stderr
@@ -44,80 +43,228 @@ _CONTEXT_LIMITS = {
     "gpt-4o-mini":  120_000,
 }
 _RESPONSE_BUFFER = 8_000
-_MAX_TOOL_ROUNDS = 3
-_MAX_CALLS_PER_ROUND = 4
+_MAX_TOOL_ROUNDS = 2
+_MAX_CALLS_PER_ROUND = 3
 
 
-def _compress_old_tool_results(messages: list[dict]) -> None:
-    """Replace tool results from PREVIOUS turns with short summaries.
+# ── Tiered compression (replaces uniform compression) ─────────────────────────
 
-    Keeps the current (last) tool-call round intact so the model can use
-    those results for its answer.  Only compresses tool messages whose
-    content is longer than a small threshold — tiny results aren't worth
-    touching.
+def _tiered_compress(messages: list[dict]) -> None:
+    """Three-tier compression: full → structured → header-only.
 
-    Preserves first 300 chars of each result (titles, function names, IDs)
-    instead of replacing with a generic placeholder — critical for multi-turn
-    where later rounds need to reference earlier findings.
+    Current round: no compression.
+    Previous round: keep QUICK_REF + function signatures + 1200 chars body.
+    Old rounds (2+): keep ONLY QUICK_REF header.
     """
-    # Find the index of the last assistant message that has tool_calls.
-    # Everything BEFORE that round is "old" and can be compressed.
-    last_tc_idx = None
-    for idx in range(len(messages) - 1, -1, -1):
-        msg = messages[idx]
-        if msg.get("role") == "assistant" and msg.get("tool_calls"):
-            last_tc_idx = idx
-            break
+    tc_indices = [i for i, m in enumerate(messages)
+                  if m.get("role") == "assistant" and m.get("tool_calls")]
 
-    if last_tc_idx is None:
-        return  # no tool calls at all
+    if len(tc_indices) < 2:
+        return
 
-    # Compress tool results that appear BEFORE last_tc_idx
-    _MIN_CHARS = 200     # don't bother compressing tiny results
-    _SUMMARY_CHARS = 300  # keep first 300 chars (titles, function names, IDs)
-    for idx in range(1, last_tc_idx):
-        msg = messages[idx]
+    current_tc = tc_indices[-1]
+    previous_tc = tc_indices[-2]
+
+    for idx, msg in enumerate(messages):
+        if msg.get("role") != "tool":
+            continue
         content = msg.get("content", "")
-        if msg.get("role") == "tool" and len(content) > _MIN_CHARS:
-            summary = content[:_SUMMARY_CHARS]
-            if len(content) > _SUMMARY_CHARS:
-                summary += "\n... [compressed — full result was in earlier round]"
-            msg["content"] = summary
+        if len(content) < 500:
+            continue
 
+        if idx > current_tc:
+            pass  # Current round: no compression
+        elif idx > previous_tc:
+            # Previous round: structured compression
+            msg["content"] = _compress_tier2(content)
+        else:
+            # Old rounds: header only
+            msg["content"] = _compress_tier3(content)
+
+
+def _compress_tier2(content: str) -> str:
+    """Keep QUICK_REF + function signatures + 1200 chars of body."""
+    delimiter = content.find("---\n")
+    if delimiter > 0:
+        quick_ref = content[:delimiter + 4]
+        body = content[delimiter + 4:]
+    else:
+        quick_ref = ""
+        body = content
+
+    # Extract function signatures from body
+    sigs = re.findall(r'function\s+\w+\s*\([^)]*\)', body)
+    sigs_str = "\nFunction signatures: " + ", ".join(sigs[:8]) if sigs else ""
+
+    truncated = body[:1200]
+    if len(body) > 1200:
+        truncated += "\n... [tier-2 compressed]"
+
+    return quick_ref + sigs_str + "\n" + truncated
+
+
+def _compress_tier3(content: str) -> str:
+    """Keep ONLY the QUICK_REF header."""
+    delimiter = content.find("---\n")
+    if delimiter > 0:
+        return content[:delimiter + 4] + "[tier-3: header only — see investigation state]"
+    return content[:300] + "\n[tier-3 compressed]"
+
+
+# ── Token counting (fixed: includes tool_calls) ──────────────────────────────
 
 def _count_tokens(messages: list[dict], model: str) -> int:
     try:
         enc = tiktoken.encoding_for_model(model)
     except Exception:
         enc = tiktoken.get_encoding("cl100k_base")
-    return sum(4 + len(enc.encode(str(m.get("content") or ""))) for m in messages)
+    total = 0
+    for m in messages:
+        total += 4
+        total += len(enc.encode(str(m.get("content") or "")))
+        # Count tool_calls (previously missing — caused budget miscalculation)
+        tool_calls = m.get("tool_calls")
+        if tool_calls:
+            for tc in (tool_calls if isinstance(tool_calls, list) else []):
+                fn = tc.get("function", {}) if isinstance(tc, dict) else {}
+                total += len(enc.encode(fn.get("name", "") or ""))
+                total += len(enc.encode(fn.get("arguments", "") or ""))
+                total += 10  # per-call overhead
+        # Count tool_call_id
+        if m.get("tool_call_id"):
+            total += 5
+    return total
 
 
 def _trim_messages(messages: list[dict], model: str) -> None:
-    """Drop oldest non-system turns in logical groups until within context limit.
-
-    A logical group is: user message + assistant response (with tool calls) + all tool results.
-    Dropping partial groups would leave orphaned tool results that confuse the model.
-    """
+    """Drop oldest non-system turns in logical groups until within context limit."""
     limit = _CONTEXT_LIMITS.get(model, 120_000) - _RESPONSE_BUFFER
     while _count_tokens(messages, model) > limit and len(messages) > 2:
-        # Find the end of the first complete turn (after system message at index 0)
         i = 1
-        # Skip user message
         if i < len(messages) and messages[i].get("role") == "user":
             i += 1
-        # Skip assistant message (may contain tool_calls)
         if i < len(messages) and messages[i].get("role") == "assistant":
             i += 1
-            # Skip all consecutive tool results belonging to this assistant turn
             while i < len(messages) and messages[i].get("role") == "tool":
                 i += 1
-        # Drop messages[1:i] as a complete logical group
         if i <= 1:
-            # Safety: at least drop one message to avoid infinite loop
             messages.pop(1)
         else:
             del messages[1:i]
+
+
+# ── Investigation state (nothing is ever lost) ───────────────────────────────
+
+def _build_investigation_state(messages: list[dict], tool_rounds: int) -> str:
+    """Extract key findings from ALL tool results (even compressed ones).
+
+    Ensures no information is ever permanently lost across rounds.
+    Rebuilds running state from ALL messages including tier-3 compressed ones.
+    """
+    functions_found: set[str] = set()
+    functions_called: set[str] = set()
+    hooks_found: dict[str, int] = {}
+    ids_found: set[str] = set()
+    queries_tried: list[str] = []
+    config_loaded = False
+
+    for msg in messages:
+        content = msg.get("content") or ""
+        role = msg.get("role", "")
+
+        if role == "tool":
+            # Extract from tool results (works even on compressed content)
+            functions_found.update(re.findall(r'function\s+(dc_\w+|dicha_\w+)', content))
+            functions_called.update(re.findall(r'\b(dc_\w+|dicha_\w+)\s*\(', content))
+            # Extract from QUICK_REF header
+            for func_line in re.findall(r'Functions:\s*(.+)', content):
+                functions_found.update(re.findall(r'\b(dc_\w+|dicha_\w+)', func_line))
+            for hook_match in re.findall(r'Hooks:\s*(.+)', content):
+                for h in re.findall(r'(woocommerce_\w+)', hook_match):
+                    hooks_found[h] = hooks_found.get(h, 0) + 1
+            ids_found.update(re.findall(r'(?:instance_id|zone_id|flat_rate|free_shipping):(\d+)', content))
+            if "=== Store Info ===" in content:
+                config_loaded = True
+
+        elif role == "assistant":
+            tool_calls = msg.get("tool_calls") or []
+            for tc in tool_calls:
+                if isinstance(tc, dict):
+                    args = tc.get("function", {}).get("arguments", "")
+                    query_match = re.search(r'"query"\s*:\s*"([^"]+)"', args)
+                    if query_match:
+                        queries_tried.append(query_match.group(1))
+
+    # Find unresolved helpers
+    unresolved = functions_called - functions_found
+
+    # Build state string
+    parts = [f"[INVESTIGATION STATE — Round {tool_rounds + 1}]"]
+    if functions_found:
+        parts.append(f"  Functions found: {', '.join(sorted(functions_found)[:15])}")
+    if hooks_found:
+        hooks_str = ", ".join(f"{h}({c})" for h, c in sorted(hooks_found.items(), key=lambda x: -x[1])[:8])
+        parts.append(f"  Hooks: {hooks_str}")
+    if ids_found:
+        parts.append(f"  IDs: {', '.join(sorted(ids_found)[:15])}")
+    if unresolved:
+        parts.append(f"  UNRESOLVED helpers (search by name!): {', '.join(sorted(unresolved)[:5])}")
+    if queries_tried:
+        parts.append(f"  Queries tried: {', '.join(queries_tried[-6:])}")
+    parts.append(f"  Config loaded: {'Yes' if config_loaded else 'No'}")
+
+    return "\n".join(parts)
+
+
+# ── Answer validation ─────────────────────────────────────────────────────────
+
+def _validate_answer(answer: str, messages: list[dict]) -> str | None:
+    """Lightweight validation of generated answer. Returns warning if issues found."""
+    warnings: list[str] = []
+
+    # Extract IDs from answer code blocks
+    code_ids: set[str] = set()
+    code_ids.update(re.findall(r'(?:instance_id|zone_id)[\s:=]+(\d+)', answer))
+    code_ids.update(re.findall(r'(?:flat_rate|free_shipping):(\d+)', answer))
+
+    if not code_ids:
+        # No IDs in answer → nothing to validate
+        if "TODO_UNKNOWN" in answer or "TODO_CHECK" in answer:
+            return "\n\u26a0\ufe0f VALIDATION: Contains TODO markers — data may be available in tool results"
+        return None
+
+    # Collect ALL IDs from tool results + system prompt (SHOP CONTEXT)
+    known_ids: set[str] = set()
+    for msg in messages:
+        if msg.get("role") not in ("tool", "system"):
+            continue
+        content = msg.get("content") or ""
+        known_ids.update(re.findall(r'(?:flat_rate|free_shipping):(\d+)', content))
+        known_ids.update(re.findall(r'instance_id["\s:=]+(\d+)', content))
+        known_ids.update(re.findall(r'zone_id["\s:=]+(\d+)', content))
+        known_ids.update(re.findall(r'zone (\d+):', content))
+
+    fake_ids = code_ids - known_ids
+    if fake_ids:
+        warnings.append(f"IDs not found in any tool result: {', '.join(sorted(fake_ids))}")
+
+    if "TODO_UNKNOWN" in answer or "TODO_CHECK" in answer:
+        warnings.append("Contains TODO markers — data may be available in tool results")
+
+    if warnings:
+        return "\n\u26a0\ufe0f VALIDATION: " + " | ".join(warnings)
+    return None
+
+
+# ── Single-round completeness check ──────────────────────────────────────────
+
+def _has_unresolved_helpers(messages: list[dict]) -> bool:
+    """Check if any tool result contains unresolved helper warnings."""
+    for msg in messages:
+        if msg.get("role") == "tool":
+            if "HELPERS CALLED BUT NOT IN RESULTS" in (msg.get("content") or ""):
+                return True
+    return False
 
 
 # ── Tool execution ────────────────────────────────────────────────────────────
@@ -140,8 +287,7 @@ def _execute_tool(tc, project_id: str) -> tuple[str, str, dict, str]:
             retry_result = call_tool(tc.function.name, arguments)
             if not (isinstance(retry_result, str) and retry_result.startswith("ERROR")):
                 return tc.id, tc.function.name, arguments, retry_result
-            # Both failed — return error with warning for the agent
-            result = f"{retry_result}\n\n⚠️ Tool failed after retry. Do NOT guess — inform the user about the retrieval error."
+            result = f"{retry_result}\n\n\u26a0\ufe0f Tool failed after retry. Do NOT guess — inform the user about the retrieval error."
 
         return tc.id, tc.function.name, arguments, result
     finally:
@@ -152,33 +298,52 @@ def _execute_tool(tc, project_id: str) -> tuple[str, str, dict, str]:
 
 def run_agent(messages: list[dict], usage: dict | None = None, model: str | None = None) -> Iterator[str]:
     """
-    Run the agentic loop. Yields text chunks as they stream from OpenAI.
+    Run the agentic loop with two-model strategy + investigation state.
 
-    - Tool-call turns: non-streaming (structured response required), parallel execution
-    - Final answer turn: streaming (yields chunks word-by-word)
-    - usage: optional mutable dict updated in-place with token counts and cost
-    - model: optional model override (defaults to config.MODEL)
+    - Tool rounds: cheap TOOL_MODEL for tool calling decisions
+    - Final answer: better ANSWER_MODEL for quality output
+    - Investigation state injected before each tool round (prevents info loss)
+    - Answer validation post-processing (catches fake IDs)
     """
-    active_model = model or config.MODEL
+    tool_model = model or config.TOOL_MODEL
+    answer_model = model or config.ANSWER_MODEL
 
     if usage is not None:
-        usage["model"] = active_model
+        usage["model"] = f"{tool_model} → {answer_model}"
 
     tool_rounds = 0
     while True:
-        # Compress old tool results + trim context before each call
-        _compress_old_tool_results(messages)
+        # Tiered compression + trim context before each call
+        _tiered_compress(messages)
+
+        # Choose model: tool rounds use cheap model, final answer uses better model
+        active_model = tool_model if tool_rounds < _MAX_TOOL_ROUNDS else answer_model
+
         _trim_messages(messages, active_model)
 
+        # Inject investigation state for rounds 2+ (after compression, before API call)
+        state_injected = False
+        if tool_rounds > 0:
+            state = _build_investigation_state(messages, tool_rounds)
+            state_msg = {"role": "system", "content": state}
+            messages.insert(1, state_msg)
+            state_injected = True
+
         # Non-streaming call — needed for tool_calls structured response
+        # temperature=0 for tool rounds: deterministic tool selection, no creativity needed
         response = _client.chat.completions.create(
             model=active_model,
             messages=messages,
             tools=TOOL_SCHEMAS,
             tool_choice="auto",
+            temperature=0,
         )
 
-        # Track usage from this non-streaming call
+        # Remove injected state after call (prevent accumulation)
+        if state_injected:
+            messages.pop(1)
+
+        # Track usage
         if usage is not None and response.usage:
             _add_usage(usage, response.usage.prompt_tokens, response.usage.completion_tokens, active_model)
 
@@ -192,9 +357,36 @@ def run_agent(messages: list[dict], usage: dict | None = None, model: str | None
                 if tc.function.name not in usage["tools_used"]:
                     usage["tools_used"].append(tc.function.name)
 
-        # No tool calls → this IS the final answer
+        # No tool calls → final answer (use better model if this was a tool model response)
         if not message.tool_calls:
+            # If the tool model produced the answer, re-generate with answer model
+            if active_model != answer_model and tool_rounds > 0:
+                # Discard tool-model answer, re-query with answer model
+                state = _build_investigation_state(messages, tool_rounds)
+                messages.insert(1, {"role": "system", "content": state})
+
+                response = _client.chat.completions.create(
+                    model=answer_model,
+                    messages=messages,
+                    tools=TOOL_SCHEMAS,
+                    tool_choice="none",
+                )
+
+                messages.pop(1)  # remove injected state
+
+                if usage is not None and response.usage:
+                    _add_usage(usage, response.usage.prompt_tokens, response.usage.completion_tokens, answer_model)
+
+                message = response.choices[0].message
+
             content = message.content or ""
+
+            # Answer validation
+            validation = _validate_answer(content, messages)
+            if validation:
+                content += validation
+                _console.print(f"  [dim][[validation]][/dim] [yellow]{validation.strip()}[/yellow]", highlight=False)
+
             messages.append({"role": "assistant", "content": content})
             yield content
             return
@@ -206,7 +398,6 @@ def run_agent(messages: list[dict], usage: dict | None = None, model: str | None
                 f"  [dim][[cap]][/dim] [yellow]{len(message.tool_calls)} tool calls → capped to {_MAX_CALLS_PER_ROUND}[/yellow]",
                 highlight=False,
             )
-            # Rebuild message with only the kept tool calls for history
             capped_msg = message.model_dump(exclude_unset=True)
             capped_msg["tool_calls"] = capped_msg["tool_calls"][:_MAX_CALLS_PER_ROUND]
             messages.append(capped_msg)
@@ -215,7 +406,7 @@ def run_agent(messages: list[dict], usage: dict | None = None, model: str | None
 
         tool_rounds += 1
 
-        # Execute all requested tools in parallel (preserve original order in results)
+        # Execute all requested tools in parallel
         current_project = config.get_project_id()
         tool_results: dict[str, tuple[str, dict, str]] = {}
         with ThreadPoolExecutor(max_workers=len(tool_calls)) as pool:
@@ -225,7 +416,7 @@ def run_agent(messages: list[dict], usage: dict | None = None, model: str | None
                 tool_results[tc_id] = (name, args, result)
                 _console.print(f"  [dim][[tool]][/dim] [cyan]{name}[/cyan]", highlight=False)
 
-        # Append results in the original order the model requested them (OpenAI API requirement)
+        # Append results in the original order
         for tc in tool_calls:
             name, args, result = tool_results[tc.id]
             messages.append({
@@ -233,6 +424,37 @@ def run_agent(messages: list[dict], usage: dict | None = None, model: str | None
                 "tool_call_id": tc.id,
                 "content":      result,
             })
+
+        # Single-round mode: skip Round 2 only if model was thorough (2+ calls) and no HELPERS
+        # With 1 call, allow Round 2 so the model can search more if needed
+        if tool_rounds == 1 and len(tool_calls) >= 2 and not _has_unresolved_helpers(messages):
+            _console.print(f"  [dim][[single-round]][/dim] [green]{len(tool_calls)} calls, no helpers — forcing answer[/green]", highlight=False)
+            # Go straight to answer model
+            state = _build_investigation_state(messages, tool_rounds)
+            messages.insert(1, {"role": "system", "content": state})
+
+            response = _client.chat.completions.create(
+                model=answer_model,
+                messages=messages,
+                tools=TOOL_SCHEMAS,
+                tool_choice="none",
+            )
+
+            messages.pop(1)
+
+            if usage is not None and response.usage:
+                _add_usage(usage, response.usage.prompt_tokens, response.usage.completion_tokens, answer_model)
+
+            content = response.choices[0].message.content or ""
+
+            validation = _validate_answer(content, messages)
+            if validation:
+                content += validation
+                _console.print(f"  [dim][[validation]][/dim] [yellow]{validation.strip()}[/yellow]", highlight=False)
+
+            messages.append({"role": "assistant", "content": content})
+            yield content
+            return
 
         # Hard limit: force final answer after max tool rounds
         if tool_rounds >= _MAX_TOOL_ROUNDS:

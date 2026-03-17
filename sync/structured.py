@@ -215,3 +215,73 @@ async def sync_structured_data(
 
     logger.info("Structured sync done: %d total rows for %s", total, pid)
     return total
+
+
+async def generate_project_summary(
+    client: httpx.AsyncClient,
+    project_id: str,
+) -> str:
+    """Generate compact config summary and store in projects.summary_text.
+
+    Called after sync completes. Reuses _format_config from tools.py logic
+    but implemented inline to avoid circular imports.
+    """
+    result = await _rpc(client, "get_project_context", {"p_project_id": project_id})
+    if not result:
+        return ""
+
+    data = result[0] if isinstance(result, list) else result
+    project = data.get("project") or {}
+    if not project:
+        return ""
+
+    # Build compact summary
+    parts = [
+        f"=== Store Info ===",
+        f"Site: {project.get('site_url')}",
+        f"WP: {project.get('wp_version')} | WC: {project.get('wc_version')} | PHP: {project.get('php_version')}",
+        f"Theme: {project.get('theme_name')} (child: {project.get('is_child_theme')})",
+        f"Active plugins: {project.get('active_plugins_count')}",
+    ]
+
+    # Payment gateways (enabled only)
+    gateways = [g for g in (data.get("payment_gateways") or []) if g.get("enabled")]
+    if gateways:
+        gw_str = ", ".join(f"{g.get('title')} ({g.get('gateway_id')})" for g in gateways)
+        parts.append(f"Payment: {gw_str}")
+
+    # Shipping methods (enabled only) — compact
+    methods = [m for m in (data.get("shipping_methods") or []) if m.get("enabled")]
+    if methods:
+        parts.append(f"Shipping: {len(methods)} enabled methods")
+        # Group by zone
+        zones: dict[int, list[str]] = {}
+        for m in methods:
+            zid = m.get("zone_id", 0)
+            zname = m.get("zone_name", "?")
+            mid = m.get("method_id", "?")
+            iid = m.get("instance_id", "?")
+            zones.setdefault(zid, []).append(f"{mid}:{iid}")
+        for zid, meths in zones.items():
+            parts.append(f"  zone {zid}: {', '.join(meths)}")
+
+    # Plugins list
+    plugins = data.get("active_plugins") or []
+    if plugins:
+        names = [p.get("plugin_name", "?") for p in plugins]
+        parts.append(f"Plugins ({len(plugins)}): {', '.join(names)}")
+
+    summary = "\n".join(parts)
+
+    # Store in projects table
+    url = f"{config.SUPABASE_URL}/rest/v1/projects?project_id=eq.{project_id}"
+    patch_headers = {
+        "apikey": config.SUPABASE_KEY,
+        "Authorization": f"Bearer {config.SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal",
+    }
+    await client.patch(url, headers=patch_headers, json={"summary_text": summary})
+    logger.info("Generated project summary for %s (%d chars)", project_id, len(summary))
+
+    return summary

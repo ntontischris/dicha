@@ -34,7 +34,7 @@ from pydantic import BaseModel
 
 import config
 from sync.models import BulkDocPayload, DocPayload, WebhookPayload
-from sync.structured import clear_project_data, sync_structured_data
+from sync.structured import clear_project_data, generate_project_summary, sync_structured_data
 from sync.vectors import sync_docs, sync_vector_data
 
 logging.basicConfig(
@@ -136,16 +136,34 @@ def _cleanup_sessions() -> None:
         del _sessions[sid]
 
 
-def _load_system_prompt(project_id: str) -> str:
-    """Load system prompt template with project_id substitution."""
+def _load_system_prompt() -> str:
+    """Load static system prompt (cacheable by OpenAI — no variable substitution)."""
     try:
-        template = _PROMPT_FILE.read_text(encoding="utf-8")
-        return template.replace("{project_id}", project_id)
+        return _PROMPT_FILE.read_text(encoding="utf-8")
     except FileNotFoundError:
-        return f"You are a WooCommerce AI assistant for project {project_id}."
+        return "You are a WooCommerce AI assistant."
 
 
-def _get_or_create_session(session_id: str, project_id: str) -> tuple[_Session, str]:
+async def _fetch_project_summary(project_id: str) -> str:
+    """Fetch project summary_text from Supabase."""
+    try:
+        http = app.state.http_client
+        url = f"{config.SUPABASE_URL}/rest/v1/projects?project_id=eq.{project_id}&select=summary_text"
+        headers = {
+            "apikey": config.SUPABASE_KEY,
+            "Authorization": f"Bearer {config.SUPABASE_KEY}",
+        }
+        r = await http.get(url, headers=headers)
+        r.raise_for_status()
+        rows = r.json()
+        if rows and rows[0].get("summary_text"):
+            return rows[0]["summary_text"]
+    except Exception:
+        pass
+    return ""
+
+
+async def _get_or_create_session(session_id: str, project_id: str) -> tuple[_Session, str]:
     """Get existing session or create new one. Returns (session, session_id)."""
     _cleanup_sessions()
 
@@ -160,8 +178,17 @@ def _get_or_create_session(session_id: str, project_id: str) -> tuple[_Session, 
     # Create new session
     new_id = session_id if session_id and session_id not in _sessions else str(uuid.uuid4())
 
-    prompt = _load_system_prompt(project_id)
-    messages = [{"role": "system", "content": prompt}]
+    prompt = _load_system_prompt()
+
+    # Inject project summary into system prompt (eliminates get_shop_config calls)
+    summary = await _fetch_project_summary(project_id)
+    if summary:
+        prompt += f"\n\n## SHOP CONTEXT (auto-injected)\n{summary}"
+
+    messages = [
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": f"[Project: {project_id}]"},
+    ]
     session = _Session(project_id=project_id, messages=messages)
     _sessions[new_id] = session
     return session, new_id
@@ -237,6 +264,9 @@ async def webhook_sync(
         vector_task,
         return_exceptions=False,
     )
+
+    # Generate project summary after sync
+    await generate_project_summary(http, payload.project_id)
 
     logger.info(
         "Sync complete for %s: %d pg rows, %d vector docs",
@@ -343,7 +373,7 @@ async def chat(
     """
     _verify_secret(x_webhook_secret, authorization)
 
-    session, sid = _get_or_create_session(req.session_id, req.project_id)
+    session, sid = await _get_or_create_session(req.session_id, req.project_id)
     session.messages.append({"role": "user", "content": req.message})
 
     from agent import run_agent

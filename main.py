@@ -29,9 +29,9 @@ _LOG_DIR    = Path(__file__).parent / "logs"
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def load_system_prompt() -> str:
+    """Load static system prompt (cacheable — no variable substitution)."""
     try:
-        template = PROMPT_FILE.read_text(encoding="utf-8")
-        return template.replace("{project_id}", config.PROJECT_ID)
+        return PROMPT_FILE.read_text(encoding="utf-8")
     except FileNotFoundError:
         console.print(f"[red]ERROR:[/red] System prompt not found at {PROMPT_FILE}")
         sys.exit(1)
@@ -73,7 +73,26 @@ def main() -> None:
         config.MODEL = args.model
 
     system_prompt = load_system_prompt()
-    messages: list[dict] = [{"role": "system", "content": system_prompt}]
+
+    # Inject project summary into system prompt (eliminates get_shop_config calls)
+    try:
+        import httpx as _httpx
+        _headers = {"apikey": config.SUPABASE_KEY, "Authorization": f"Bearer {config.SUPABASE_KEY}"}
+        _r = _httpx.get(
+            f"{config.SUPABASE_URL}/rest/v1/projects?project_id=eq.{config.PROJECT_ID}&select=summary_text",
+            headers=_headers, timeout=5,
+        )
+        _rows = _r.json() if _r.status_code == 200 else []
+        _summary = _rows[0].get("summary_text", "") if _rows else ""
+        if _summary:
+            system_prompt += f"\n\n## SHOP CONTEXT (auto-injected)\n{_summary}"
+    except Exception:
+        pass
+
+    messages: list[dict] = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": f"[Project: {config.PROJECT_ID}]"},
+    ]
 
     # Startup banner
     console.print(Panel(

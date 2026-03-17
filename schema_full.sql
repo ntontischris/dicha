@@ -351,7 +351,9 @@ AS $$
             WHEN 1 THEN 0.020
             WHEN 2 THEN 0.010
             ELSE 0.0
-          END AS rrf_score
+          END
+        + CASE WHEN d.is_active = true THEN 0.005 ELSE 0.0 END
+        AS rrf_score
     FROM vector_ranked v
     FULL OUTER JOIN fts_ranked f ON v.id = f.id
     JOIN documents d ON d.id = COALESCE(v.id, f.id)

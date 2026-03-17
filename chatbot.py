@@ -13,14 +13,31 @@ st.title("🛍️ WooCommerce AI Agent")
 
 @st.cache_resource
 def load_system_prompt() -> str:
-    template = (Path(__file__).parent / "prompts" / "system_prompt.md").read_text(encoding="utf-8")
-    return template.replace("{project_id}", config.PROJECT_ID)
+    """Load static system prompt (cacheable — no variable substitution)."""
+    return (Path(__file__).parent / "prompts" / "system_prompt.md").read_text(encoding="utf-8")
 
 
 # ── Session state init ────────────────────────────────────────────────────────
 
 if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "system", "content": load_system_prompt()}]
+    _prompt = load_system_prompt()
+    try:
+        import httpx as _httpx
+        _headers = {"apikey": config.SUPABASE_KEY, "Authorization": f"Bearer {config.SUPABASE_KEY}"}
+        _r = _httpx.get(
+            f"{config.SUPABASE_URL}/rest/v1/projects?project_id=eq.{config.PROJECT_ID}&select=summary_text",
+            headers=_headers, timeout=5,
+        )
+        _rows = _r.json() if _r.status_code == 200 else []
+        _summary = _rows[0].get("summary_text", "") if _rows else ""
+        if _summary:
+            _prompt += f"\n\n## SHOP CONTEXT (auto-injected)\n{_summary}"
+    except Exception:
+        pass
+    st.session_state.messages = [
+        {"role": "system", "content": _prompt},
+        {"role": "user", "content": f"[Project: {config.PROJECT_ID}]"},
+    ]
 
 if "session_usage" not in st.session_state:
     st.session_state.session_usage = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
@@ -36,7 +53,10 @@ with st.sidebar:
     st.metric("Total cost", f"${su['cost_usd']:.4f}")
 
     if st.button("🗑️ Clear conversation"):
-        st.session_state.messages = [{"role": "system", "content": load_system_prompt()}]
+        st.session_state.messages = [
+            {"role": "system", "content": load_system_prompt()},
+            {"role": "user", "content": f"[Project: {config.PROJECT_ID}]"},
+        ]
         st.session_state.session_usage = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
         st.rerun()
 

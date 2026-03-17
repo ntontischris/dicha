@@ -10,6 +10,8 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 PROJECT_ID = os.getenv("PROJECT_ID", "test-shop-1")
 MODEL = os.getenv("MODEL", "gpt-5-mini")
+TOOL_MODEL = os.getenv("TOOL_MODEL", "gpt-4.1-mini")      # deterministic (temperature=0) for tool rounds
+ANSWER_MODEL = os.getenv("ANSWER_MODEL", "gpt-4.1-mini")  # same model for final answer
 
 # Thread-local project ID override (for concurrent chat requests)
 _local = threading.local()
