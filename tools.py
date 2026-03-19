@@ -246,6 +246,96 @@ def search_by_hook(hook_name: str) -> str:
     return "\n\n---\n\n".join(parts)
 
 
+# -- Tool: search_plugin_settings ------------------------------------
+
+# TTL cache for plugin settings
+_ps_cache: dict[str, tuple[str, float]] = {}
+_ps_lock = threading.Lock()
+_PS_TTL = 300.0
+
+
+def search_plugin_settings(plugin_name: str = "") -> str:
+    """Search plugin settings for a specific plugin or list all configured plugins.
+
+    Queries the plugin_settings table directly via Supabase REST API.
+    Cached for 5 minutes per project.
+    """
+    project_id = config.get_project_id()
+    cache_key = f"{project_id}:{plugin_name.lower().strip()}"
+    now = time.monotonic()
+
+    with _ps_lock:
+        if cache_key in _ps_cache:
+            cached, ts = _ps_cache[cache_key]
+            if now - ts < _PS_TTL:
+                return cached
+
+    # Query Supabase REST API directly
+    url = f"{config.SUPABASE_URL}/rest/v1/plugin_settings"
+    params = f"project_id=eq.{project_id}&select=plugin_slug,plugin_name,plugin_file,settings"
+
+    if plugin_name:
+        # Fuzzy match on slug or name
+        search_term = plugin_name.strip().lower()
+        params += f"&or=(plugin_slug.ilike.*{search_term}*,plugin_name.ilike.*{search_term}*)"
+
+    try:
+        r = _http.get(f"{url}?{params}", headers=_HEADERS)
+        r.raise_for_status()
+        rows = r.json()
+    except Exception as e:
+        return f"ERROR fetching plugin settings: {e}"
+
+    if not rows:
+        if plugin_name:
+            return f"No settings found for plugin matching '{plugin_name}'. Try a different name or leave empty to list all."
+        return "No plugin settings synced for this project."
+
+    # Format output
+    if plugin_name and len(rows) <= 3:
+        # Detailed view for specific plugin(s)
+        parts = []
+        for row in rows:
+            slug = row.get("plugin_slug", "?")
+            name = row.get("plugin_name", slug)
+            settings = row.get("settings", {})
+            if isinstance(settings, str):
+                import json as _json
+                settings = _json.loads(settings)
+
+            parts.append(f"=== {name} ({slug}) ===")
+            if not settings:
+                parts.append("  (no settings collected)")
+                continue
+
+            for key, value in settings.items():
+                # Truncate very long values
+                val_str = str(value)
+                if len(val_str) > 200:
+                    val_str = val_str[:200] + "..."
+                parts.append(f"  {key}: {val_str}")
+        result = "\n".join(parts)
+    else:
+        # List view
+        lines = [f"=== Plugin Settings ({len(rows)} plugins) ==="]
+        for row in rows:
+            slug = row.get("plugin_slug", "?")
+            name = row.get("plugin_name", slug)
+            settings = row.get("settings", {})
+            if isinstance(settings, str):
+                import json as _json
+                settings = _json.loads(settings)
+            count = len(settings) if isinstance(settings, dict) else 0
+            lines.append(f"- {name} ({slug}): {count} settings")
+        lines.append("\nUse search_plugin_settings(plugin_name) for detailed settings of a specific plugin.")
+        result = "\n".join(lines)
+
+    with _ps_lock:
+        _ps_cache[cache_key] = (result, now)
+
+    return result
+
+
 # -- Tool: get_shop_config -------------------------------------------
 
 def get_shop_config() -> str:
@@ -709,6 +799,32 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_plugin_settings",
+            "description": (
+                "Search the settings/configuration of WordPress plugins installed on this shop. "
+                "Use when the user asks about plugin settings, configuration, SEO setup, "
+                "caching settings, multilingual configuration, form settings, "
+                "or any functionality typically provided by a plugin. "
+                "Pass a plugin name to get its settings, or leave empty to list all."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "plugin_name": {
+                        "type": "string",
+                        "description": (
+                            "Name or slug of the plugin to look up "
+                            "(e.g. 'yoast', 'wp-rocket', 'elementor'). "
+                            "Leave empty to list all plugins with settings."
+                        ),
+                    },
+                },
+            },
+        },
+    },
 ]
 
 
@@ -718,6 +834,7 @@ _TOOL_MAP = {
     "search": search,
     "search_by_hook": search_by_hook,
     "get_shop_config": get_shop_config,
+    "search_plugin_settings": search_plugin_settings,
 }
 
 

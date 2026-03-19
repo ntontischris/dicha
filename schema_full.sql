@@ -29,6 +29,7 @@ DROP FUNCTION IF EXISTS get_project_context CASCADE;
 DROP FUNCTION IF EXISTS match_documents CASCADE;
 
 DROP TABLE IF EXISTS documents CASCADE;
+DROP TABLE IF EXISTS plugin_settings CASCADE;
 DROP TABLE IF EXISTS active_plugins CASCADE;
 DROP TABLE IF EXISTS wc_general_settings CASCADE;
 DROP TABLE IF EXISTS tax_settings CASCADE;
@@ -157,6 +158,19 @@ CREATE TABLE active_plugins (
 );
 
 
+-- ── plugin_settings ─────────────────────────────────────────────────
+CREATE TABLE plugin_settings (
+  id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  project_id  text NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
+  plugin_slug text NOT NULL,
+  plugin_name text DEFAULT '',
+  plugin_file text DEFAULT '',
+  settings    jsonb DEFAULT '{}',
+  synced_at   timestamptz DEFAULT now(),
+  UNIQUE (project_id, plugin_slug)
+);
+
+
 -- ── documents (vector search + embeddings) ───────────────────────────
 CREATE TABLE documents (
   id                  bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -271,6 +285,7 @@ CREATE INDEX shipping_methods_project_idx ON shipping_methods(project_id);
 CREATE INDEX tax_settings_project_idx ON tax_settings(project_id);
 CREATE INDEX wc_general_settings_project_idx ON wc_general_settings(project_id);
 CREATE INDEX active_plugins_project_idx ON active_plugins(project_id);
+CREATE INDEX plugin_settings_project_idx ON plugin_settings(project_id);
 
 
 -- ═════════════════════════════════════════════════════════════════════
@@ -491,6 +506,7 @@ BEGIN
   DELETE FROM documents        WHERE project_id = p_project_id AND scope = 'project';
 
   -- Structured tables
+  DELETE FROM plugin_settings  WHERE project_id = p_project_id;
   DELETE FROM active_plugins   WHERE project_id = p_project_id;
   DELETE FROM wc_general_settings WHERE project_id = p_project_id;
   DELETE FROM tax_settings     WHERE project_id = p_project_id;
@@ -514,7 +530,8 @@ RETURNS TABLE (
   shipping_methods jsonb,
   tax_settings     jsonb,
   wc_general_settings jsonb,
-  active_plugins   jsonb
+  active_plugins   jsonb,
+  plugin_settings  jsonb
 )
 LANGUAGE sql
 AS $$
@@ -550,6 +567,12 @@ AS $$
     COALESCE(
       (SELECT jsonb_agg(to_jsonb(ap.*)) FROM active_plugins ap WHERE ap.project_id = p_project_id),
       '[]'::jsonb
+    ),
+
+    -- Plugin settings
+    COALESCE(
+      (SELECT jsonb_agg(to_jsonb(ps.*)) FROM plugin_settings ps WHERE ps.project_id = p_project_id),
+      '[]'::jsonb
     );
 $$;
 
@@ -566,6 +589,7 @@ ALTER TABLE shipping_methods    ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tax_settings        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE wc_general_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE active_plugins      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE plugin_settings     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE documents           ENABLE ROW LEVEL SECURITY;
 
 -- Service role can do everything (webhook uses service_role key)
@@ -576,6 +600,7 @@ CREATE POLICY "Service role full access" ON shipping_methods    FOR ALL USING (t
 CREATE POLICY "Service role full access" ON tax_settings        FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Service role full access" ON wc_general_settings FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Service role full access" ON active_plugins      FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Service role full access" ON plugin_settings     FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Service role full access" ON documents           FOR ALL USING (true) WITH CHECK (true);
 
 

@@ -62,7 +62,7 @@ async def sync_structured_data(
     client: httpx.AsyncClient,
     payload: WebhookPayload,
 ) -> int:
-    """Upsert structured data into 7 tables (sequential for FK order).
+    """Upsert structured data into 8 tables (sequential for FK order).
 
     Returns the total number of rows upserted.
     """
@@ -210,6 +210,23 @@ async def sync_structured_data(
     except Exception as e:
         errors.append(f"active_plugins: {e}")
 
+    # -- 8. plugin_settings ---------------------------------------------
+    try:
+        ps_rows = [
+            {
+                "project_id": pid,
+                "plugin_slug": ps.plugin_slug,
+                "plugin_name": ps.plugin_name,
+                "plugin_file": ps.plugin_file,
+                "settings": json.dumps(ps.settings),
+            }
+            for ps in payload.data.plugin_settings
+        ]
+        await _upsert(client, "plugin_settings", ps_rows)
+        total += len(ps_rows)
+    except Exception as e:
+        errors.append(f"plugin_settings: {e}")
+
     if errors:
         logger.error("Structured sync errors for %s: %s", pid, "; ".join(errors))
 
@@ -270,6 +287,12 @@ async def generate_project_summary(
     if plugins:
         names = [p.get("plugin_name", "?") for p in plugins]
         parts.append(f"Plugins ({len(plugins)}): {', '.join(names)}")
+
+    # Plugin settings available (dynamic list)
+    ps_list = data.get("plugin_settings") or []
+    if ps_list:
+        ps_names = [ps.get("plugin_name") or ps.get("plugin_slug", "?") for ps in ps_list]
+        parts.append(f"Plugin Settings Available: {', '.join(ps_names)} (use search_plugin_settings for details)")
 
     summary = "\n".join(parts)
 

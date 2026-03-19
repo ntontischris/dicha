@@ -150,11 +150,21 @@ class ActivePlugin(BaseModel):
     file: str = ""
 
 
+class PluginSettings(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    plugin_slug: str = ""
+    plugin_name: str = ""
+    plugin_file: str = ""
+    settings: dict = {}
+
+
 class WebhookInnerData(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     woocommerce: WooCommerceData = WooCommerceData()
     active_plugins: list[ActivePlugin] = []
+    plugin_settings: list[PluginSettings] = []
     code_snippets: list[CodeSnippet] = []
     functions_php: FunctionsPhp = FunctionsPhp()
     theme_files: list[ThemeFile] = []
