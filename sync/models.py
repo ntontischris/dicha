@@ -17,6 +17,7 @@ class PaymentGateway(BaseModel):
     description: str = ""
     supports: list[str] = []
     settings: dict = {}
+    form_fields_meta: dict = {}
     _error: str | None = None
 
 
@@ -40,6 +41,8 @@ class ShippingMethod(BaseModel):
     min_amount: str | None = None
     class_costs: dict | None = None
     no_class_cost: str | None = None
+    settings: dict = {}
+    form_fields_meta: dict = {}
 
 
 class ShippingZone(BaseModel):
@@ -140,6 +143,16 @@ class ThemeInfo(BaseModel):
     parent: ThemeParent | None = None
 
 
+class ThemeSettings(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    theme_mods: dict = {}
+    source: str = "customizer"
+    framework: str = ""
+    framework_options: dict = {}
+    framework_option_key: str = ""
+
+
 class ActivePlugin(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -169,6 +182,7 @@ class WebhookInnerData(BaseModel):
     functions_php: FunctionsPhp = FunctionsPhp()
     theme_files: list[ThemeFile] = []
     theme_info: ThemeInfo = ThemeInfo()
+    theme_settings: ThemeSettings = ThemeSettings()
 
 
 class WebhookPayload(BaseModel):
