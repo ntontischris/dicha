@@ -526,6 +526,25 @@ def _format_config(data: dict) -> str:
         parts.append(f"\n=== Active Plugins ({len(plugins)}) ===")
         parts.append(", ".join(names))
 
+    # Theme settings
+    theme_settings = data.get("theme_settings") or []
+    if theme_settings:
+        ts_list = theme_settings if isinstance(theme_settings, list) else [theme_settings]
+        for ts_item in ts_list:
+            if not isinstance(ts_item, dict):
+                continue
+            settings = ts_item.get("settings", {})
+            if isinstance(settings, str):
+                settings = json.loads(settings)
+            framework = settings.get("framework", "customizer") if isinstance(settings, dict) else "customizer"
+            slug = ts_item.get("theme_slug", "?")
+            parts.append(f"\n=== Theme Settings ({slug}) ===")
+            parts.append(f"Framework: {framework}")
+            if isinstance(settings, dict):
+                opt_count = len(settings.get("framework_options", {})) + len(settings.get("theme_mods", {}))
+                parts.append(f"Total options: {opt_count}")
+                parts.append("(Use search() for specific theme settings)")
+
     return "\n".join(parts)
 
 
