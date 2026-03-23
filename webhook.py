@@ -34,6 +34,7 @@ from pydantic import BaseModel
 
 import config
 from sync.models import BulkDocPayload, DocPayload, WebhookPayload
+from sync.settings_docs import generate_settings_documents
 from sync.structured import clear_project_data, generate_project_summary, sync_structured_data
 from sync.vectors import sync_docs, sync_vector_data
 
@@ -238,9 +239,10 @@ async def webhook_sync(
 ):
     """Receive WooCommerce plugin data and sync to Supabase.
 
-    Two branches run in parallel:
-    1. Structured data → clear + upsert 7 tables
+    Three branches:
+    1. Structured data → clear + upsert 9 tables
     2. Vector data → chunk + extract + context + embed + upsert documents
+    3. Settings-as-Documents → render settings → context + embed → upsert
     """
     _verify_secret(x_webhook_secret, authorization)
 
@@ -265,6 +267,10 @@ async def webhook_sync(
         return_exceptions=False,
     )
 
+    # Settings-as-Documents: render settings → contextual retrieval → embed → upsert
+    settings_doc_count = await generate_settings_documents(http, openai, payload)
+    logger.info("Settings docs: %d documents for %s", settings_doc_count, payload.project_id)
+
     # Generate project summary after sync
     await generate_project_summary(http, payload.project_id)
 
@@ -278,6 +284,7 @@ async def webhook_sync(
         "project_id": payload.project_id,
         "structured_rows": pg_count,
         "vector_documents": vec_count,
+        "settings_documents": settings_doc_count,
     }
 
 
