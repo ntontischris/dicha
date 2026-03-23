@@ -149,6 +149,8 @@ async def sync_structured_data(
                     "min_amount": m.min_amount,
                     "class_costs": json.dumps(m.class_costs) if m.class_costs else None,
                     "no_class_cost": m.no_class_cost,
+                    "settings": json.dumps(m.settings) if m.settings else None,
+                    "form_fields_meta": json.dumps(m.form_fields_meta) if m.form_fields_meta else None,
                 })
         await _upsert(client, "shipping_methods", method_rows)
         total += len(method_rows)
@@ -227,6 +229,25 @@ async def sync_structured_data(
     except Exception as e:
         errors.append(f"plugin_settings: {e}")
 
+    # -- 9. theme_settings -----------------------------------------------
+    try:
+        ts = payload.data.theme_settings
+        if ts.theme_mods or ts.framework_options:
+            ts_row = {
+                "project_id": pid,
+                "theme_slug": payload.data.theme_info.name.lower().replace(" ", "-"),
+                "source": ts.source or "customizer",
+                "settings": json.dumps({
+                    "theme_mods": ts.theme_mods,
+                    "framework": ts.framework,
+                    "framework_options": ts.framework_options,
+                }),
+            }
+            await _upsert(client, "theme_settings", [ts_row])
+            total += 1
+    except Exception as e:
+        errors.append(f"theme_settings: {e}")
+
     if errors:
         logger.error("Structured sync errors for %s: %s", pid, "; ".join(errors))
 
@@ -293,6 +314,19 @@ async def generate_project_summary(
     if ps_list:
         ps_names = [ps.get("plugin_name") or ps.get("plugin_slug", "?") for ps in ps_list]
         parts.append(f"Plugin Settings Available: {', '.join(ps_names)} (use search_plugin_settings for details)")
+
+    # Theme settings
+    ts_data = data.get("theme_settings")
+    if ts_data:
+        ts_list = ts_data if isinstance(ts_data, list) else [ts_data]
+        for ts_item in ts_list:
+            if isinstance(ts_item, dict):
+                settings = ts_item.get("settings", {})
+                if isinstance(settings, str):
+                    settings = json.loads(settings)
+                framework = settings.get("framework", "customizer") if isinstance(settings, dict) else "customizer"
+                parts.append(f"Theme Settings: {framework} framework detected")
+                break
 
     summary = "\n".join(parts)
 
