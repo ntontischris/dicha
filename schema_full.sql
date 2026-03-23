@@ -29,6 +29,7 @@ DROP FUNCTION IF EXISTS get_project_context CASCADE;
 DROP FUNCTION IF EXISTS match_documents CASCADE;
 
 DROP TABLE IF EXISTS documents CASCADE;
+DROP TABLE IF EXISTS theme_settings CASCADE;
 DROP TABLE IF EXISTS plugin_settings CASCADE;
 DROP TABLE IF EXISTS active_plugins CASCADE;
 DROP TABLE IF EXISTS wc_general_settings CASCADE;
@@ -106,6 +107,8 @@ CREATE TABLE shipping_methods (
   min_amount          text,
   class_costs         jsonb,
   no_class_cost       text,
+  settings            jsonb DEFAULT '{}',
+  form_fields_meta    jsonb DEFAULT '{}',
   synced_at           timestamptz DEFAULT now(),
   UNIQUE (project_id, zone_id, instance_id)
 );
@@ -168,6 +171,17 @@ CREATE TABLE plugin_settings (
   settings    jsonb DEFAULT '{}',
   synced_at   timestamptz DEFAULT now(),
   UNIQUE (project_id, plugin_slug)
+);
+
+
+-- ── theme_settings ──────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS theme_settings (
+    project_id text NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
+    theme_slug text NOT NULL,
+    source text NOT NULL DEFAULT 'customizer',
+    settings jsonb DEFAULT '{}',
+    synced_at timestamptz DEFAULT now(),
+    PRIMARY KEY (project_id, theme_slug)
 );
 
 
@@ -504,8 +518,11 @@ AS $$
 BEGIN
   -- Vector documents (only project-scoped, NEVER global)
   DELETE FROM documents        WHERE project_id = p_project_id AND scope = 'project';
+  -- Safety net: explicit settings doc cleanup
+  DELETE FROM documents        WHERE project_id = p_project_id AND type = 'plugin_settings_doc';
 
   -- Structured tables
+  DELETE FROM theme_settings   WHERE project_id = p_project_id;
   DELETE FROM plugin_settings  WHERE project_id = p_project_id;
   DELETE FROM active_plugins   WHERE project_id = p_project_id;
   DELETE FROM wc_general_settings WHERE project_id = p_project_id;
@@ -531,47 +548,37 @@ RETURNS TABLE (
   tax_settings     jsonb,
   wc_general_settings jsonb,
   active_plugins   jsonb,
-  plugin_settings  jsonb
+  plugin_settings  jsonb,
+  theme_settings   jsonb
 )
 LANGUAGE sql
 AS $$
   SELECT
-    -- Project info
     (SELECT to_jsonb(p.*) FROM projects p WHERE p.project_id = p_project_id),
-
-    -- Payment gateways
     COALESCE(
       (SELECT jsonb_agg(to_jsonb(pg.*)) FROM payment_gateways pg WHERE pg.project_id = p_project_id),
       '[]'::jsonb
     ),
-
-    -- Shipping zones
     COALESCE(
       (SELECT jsonb_agg(to_jsonb(sz.*)) FROM shipping_zones sz WHERE sz.project_id = p_project_id),
       '[]'::jsonb
     ),
-
-    -- Shipping methods
     COALESCE(
       (SELECT jsonb_agg(to_jsonb(sm.*)) FROM shipping_methods sm WHERE sm.project_id = p_project_id),
       '[]'::jsonb
     ),
-
-    -- Tax settings
     (SELECT to_jsonb(ts.*) FROM tax_settings ts WHERE ts.project_id = p_project_id),
-
-    -- General settings
     (SELECT to_jsonb(gs.*) FROM wc_general_settings gs WHERE gs.project_id = p_project_id),
-
-    -- Active plugins
     COALESCE(
       (SELECT jsonb_agg(to_jsonb(ap.*)) FROM active_plugins ap WHERE ap.project_id = p_project_id),
       '[]'::jsonb
     ),
-
-    -- Plugin settings
     COALESCE(
       (SELECT jsonb_agg(to_jsonb(ps.*)) FROM plugin_settings ps WHERE ps.project_id = p_project_id),
+      '[]'::jsonb
+    ),
+    COALESCE(
+      (SELECT jsonb_agg(to_jsonb(ths.*)) FROM theme_settings ths WHERE ths.project_id = p_project_id),
       '[]'::jsonb
     );
 $$;
@@ -590,6 +597,7 @@ ALTER TABLE tax_settings        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE wc_general_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE active_plugins      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE plugin_settings     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE theme_settings      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE documents           ENABLE ROW LEVEL SECURITY;
 
 -- Service role can do everything (webhook uses service_role key)
@@ -601,6 +609,7 @@ CREATE POLICY "Service role full access" ON tax_settings        FOR ALL USING (t
 CREATE POLICY "Service role full access" ON wc_general_settings FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Service role full access" ON active_plugins      FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Service role full access" ON plugin_settings     FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Service role full access" ON theme_settings      FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Service role full access" ON documents           FOR ALL USING (true) WITH CHECK (true);
 
 
