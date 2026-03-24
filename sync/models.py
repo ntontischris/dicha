@@ -168,6 +168,14 @@ class ThemeSettings(BaseModel):
     framework_options: dict = {}
     framework_option_key: str = ""
 
+    @field_validator("theme_mods", "framework_options", mode="before")
+    @classmethod
+    def coerce_list_to_dict(cls, v: object) -> dict:
+        """PHP sends empty arrays as [] instead of {}."""
+        if isinstance(v, list):
+            return {}
+        return v
+
 
 class ActivePlugin(BaseModel):
     model_config = ConfigDict(extra="ignore")
