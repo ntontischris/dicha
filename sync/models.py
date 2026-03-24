@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 # -- Webhook payload (matches WooCommerce plugin output exactly) -------
@@ -19,6 +19,14 @@ class PaymentGateway(BaseModel):
     settings: dict = {}
     form_fields_meta: dict = {}
     _error: str | None = None
+
+    @field_validator("settings", "form_fields_meta", mode="before")
+    @classmethod
+    def coerce_list_to_dict(cls, v: object) -> dict:
+        """PHP sends empty arrays as [] instead of {}."""
+        if isinstance(v, list):
+            return {}
+        return v
 
 
 class ShippingLocation(BaseModel):
@@ -43,6 +51,14 @@ class ShippingMethod(BaseModel):
     no_class_cost: str | None = None
     settings: dict = {}
     form_fields_meta: dict = {}
+
+    @field_validator("settings", "form_fields_meta", mode="before")
+    @classmethod
+    def coerce_list_to_dict(cls, v: object) -> dict:
+        """PHP sends empty arrays as [] instead of {}."""
+        if isinstance(v, list):
+            return {}
+        return v
 
 
 class ShippingZone(BaseModel):
