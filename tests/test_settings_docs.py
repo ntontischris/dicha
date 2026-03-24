@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from sync.settings_docs import (
     _format_value,
+    _extract_settings_keywords,
+    _infer_plugin_category,
     render_gateway_doc,
     render_shipping_doc,
     render_theme_doc,
@@ -105,3 +107,41 @@ def test_render_plugin_doc():
     doc = render_plugin_doc(ps)
     assert "# Plugin Settings: WP Rocket" in doc
     assert "minify_css: 1" in doc
+
+
+def test_render_plugin_doc_groups_by_prefix():
+    ps = {
+        "plugin_slug": "wp-rocket",
+        "plugin_name": "WP Rocket",
+        "settings": {
+            "minify_css": 1,
+            "minify_js": 0,
+            "defer_all_js": 1,
+            "lazyload": 1,
+            "lazyload_iframes": 0,
+            "empty_setting": "",
+            "_internal": "skip",
+        },
+    }
+    doc = render_plugin_doc(ps)
+    assert "## Minify" in doc
+    assert "minify_css: 1" in doc
+    # Empty values should be skipped
+    assert "empty_setting" not in doc
+    assert "_internal" not in doc
+
+
+def test_extract_settings_keywords():
+    content = "# Plugin\n## Shop Options\n- shop_per_page: 24\n- shop_layout: grid"
+    kw = _extract_settings_keywords(content, "Woodmart", "theme")
+    assert "woodmart" in kw
+    assert "theme" in kw
+    assert "shop_per_page" in kw
+    assert "shop" in kw  # from heading
+
+
+def test_infer_plugin_category():
+    assert _infer_plugin_category("wordpress-seo", "Yoast SEO") == "seo"
+    assert _infer_plugin_category("elementor", "Elementor") == "page-builder"
+    assert _infer_plugin_category("wp-rocket", "WP Rocket") == "performance"
+    assert _infer_plugin_category("unknown-plugin", "Some Plugin") == "plugin"

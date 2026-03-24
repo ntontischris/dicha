@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 import httpx
 from openai import AsyncOpenAI
@@ -159,7 +160,7 @@ def render_theme_doc(theme_info: dict, theme_settings: dict) -> str:
 
 
 def render_plugin_doc(plugin_settings: dict) -> str:
-    """Render generic plugin settings as a readable document."""
+    """Render generic plugin settings with prefix-based sectioning."""
     slug = plugin_settings.get("plugin_slug", "?")
     name = plugin_settings.get("plugin_name", slug)
     settings = plugin_settings.get("settings", {})
@@ -167,22 +168,77 @@ def render_plugin_doc(plugin_settings: dict) -> str:
     lines = [
         f"# Plugin Settings: {name}",
         f"Slug: {slug}",
-        "",
-        "## Configuration",
     ]
 
     if isinstance(settings, str):
         settings = json.loads(settings)
 
-    if settings:
-        for key, value in settings.items():
-            if key.startswith("_"):
-                continue
+    if not settings:
+        lines.append("\n(no settings collected)")
+        return "\n".join(lines)
+
+    # Group by prefix for better chunking
+    groups: dict[str, list[tuple[str, object]]] = {}
+    for key, value in settings.items():
+        if key.startswith("_"):
+            continue
+        # Skip empty values
+        if value is None or value == "" or value == [] or value == {}:
+            continue
+        prefix = key.split("_")[0] if "_" in key else "general"
+        groups.setdefault(prefix, []).append((key, value))
+
+    for group_name, items in groups.items():
+        lines.append(f"\n## {group_name.replace('_', ' ').title()}")
+        for key, value in items:
             lines.append(f"- {key}: {_format_value(value)}")
-    else:
-        lines.append("(no settings collected)")
 
     return "\n".join(lines)
+
+
+_PLUGIN_CATEGORIES = {
+    "yoast": "seo", "rank-math": "seo", "seo": "seo",
+    "elementor": "page-builder", "wpbakery": "page-builder",
+    "wp-rocket": "performance", "litespeed": "performance", "autoptimize": "performance",
+    "wordfence": "security", "sucuri": "security", "aios": "security",
+    "mailchimp": "email", "klaviyo": "email", "mailerlite": "email",
+    "gravity": "forms", "wpforms": "forms", "contact-form": "forms",
+    "stripe": "payments", "paypal": "payments", "viva": "payments",
+}
+
+
+def _infer_plugin_category(slug: str, name: str) -> str:
+    """Infer category from plugin slug/name."""
+    combined = f"{slug} {name}".lower()
+    for keyword, category in _PLUGIN_CATEGORIES.items():
+        if keyword in combined:
+            return category
+    return "plugin"
+
+
+def _extract_settings_keywords(content: str, name: str, category: str) -> list[str]:
+    """Extract keywords from settings doc for FTS weight A indexing."""
+    keywords = set()
+    keywords.add(name.lower())
+    keywords.add(category)
+
+    # Setting key names
+    for match in re.findall(r'^- (\w+):', content, re.MULTILINE):
+        keywords.add(match.lower())
+
+    # Labels from form_fields
+    for match in re.findall(r'^- ([^:]+):', content, re.MULTILINE):
+        for word in match.lower().split():
+            if len(word) > 3:
+                keywords.add(word)
+
+    # Section headings
+    for match in re.findall(r'^##\s+(.+)', content, re.MULTILINE):
+        for word in match.lower().split():
+            if len(word) > 3:
+                keywords.add(word)
+
+    return list(keywords)[:30]
 
 
 async def generate_settings_documents(
@@ -201,61 +257,8 @@ async def generate_settings_documents(
     docs: list[DocPayload] = []
     pid = payload.project_id
 
-    # -- Payment gateways (enabled only) --------------------------------
-    for gw in payload.data.woocommerce.payment_gateways:
-        if gw.enabled != "yes":
-            continue
-        content = render_gateway_doc(gw.model_dump())
-        if len(content) < 50:
-            continue
-        docs.append(DocPayload(
-            project_id=pid,
-            type="plugin_settings_doc",
-            title=f"Settings: {gw.method_title or gw.id} payment gateway",
-            content=content,
-            category="payments",
-        ))
-
-    # -- Shipping methods (grouped per zone to reduce document count) ----
-    for zone in payload.data.woocommerce.shipping_zones:
-        enabled_methods = [m for m in zone.methods if m.enabled == "yes"]
-        if not enabled_methods:
-            continue
-        zone_lines = [
-            f"# Shipping Zone: {zone.zone_name} (ID: {zone.zone_id})",
-            f"Methods: {len(enabled_methods)} enabled",
-            "",
-        ]
-        for method in enabled_methods:
-            method_dict = method.model_dump()
-            settings = method_dict.get("settings", {})
-            form_fields = method_dict.get("form_fields_meta", {})
-            zone_lines.append(f"## {method.method_title} ({method.method_id}:{method.instance_id})")
-            if settings and form_fields:
-                zone_lines.extend(_render_settings_block(settings, form_fields))
-            elif settings:
-                for key, value in settings.items():
-                    if not key.startswith("_"):
-                        zone_lines.append(f"- {key}: {_format_value(value)}")
-            else:
-                # Use basic fields from the model
-                if method.cost is not None:
-                    zone_lines.append(f"- Cost: {method.cost}")
-                if method.requires:
-                    zone_lines.append(f"- Requires: {method.requires}")
-                if method.min_amount:
-                    zone_lines.append(f"- Min amount: {method.min_amount}")
-            zone_lines.append("")
-        content = "\n".join(zone_lines)
-        if len(content) < 50:
-            continue
-        docs.append(DocPayload(
-            project_id=pid,
-            type="plugin_settings_doc",
-            title=f"Settings: Shipping zone {zone.zone_name}",
-            content=content,
-            category="shipping",
-        ))
+    # -- Payment gateways: SKIP (served by search_settings domain=payments) --
+    # -- Shipping methods: SKIP (served by search_settings domain=shipping) --
 
     # -- Theme settings -------------------------------------------------
     ts = payload.data.theme_settings
@@ -265,25 +268,32 @@ async def generate_settings_documents(
             ts.model_dump(),
         )
         if len(content) > 50:
+            tags = _extract_settings_keywords(content, payload.data.theme_info.name, "theme")
             docs.append(DocPayload(
                 project_id=pid,
                 type="plugin_settings_doc",
                 title=f"Settings: {payload.data.theme_info.name} theme",
                 content=content,
                 category="theme",
+                tags=tags,
             ))
 
-    # -- Generic plugin settings ----------------------------------------
+    # -- Generic plugin settings (exclude WooCommerce — already in structured tables) --
+    wc_slugs = {"woocommerce", "woocommerce-legacy-rest-api"}
     for ps in payload.data.plugin_settings:
+        if ps.plugin_slug in wc_slugs:
+            continue
         content = render_plugin_doc(ps.model_dump())
         if len(content) < 50:
             continue
+        tags = _extract_settings_keywords(content, ps.plugin_name or ps.plugin_slug, "plugin")
         docs.append(DocPayload(
             project_id=pid,
             type="plugin_settings_doc",
             title=f"Settings: {ps.plugin_name or ps.plugin_slug}",
             content=content,
-            category="plugin",
+            category=_infer_plugin_category(ps.plugin_slug, ps.plugin_name),
+            tags=tags,
         ))
 
     if not docs:
@@ -296,5 +306,4 @@ async def generate_settings_documents(
         ", ".join(d.title for d in docs[:5]),
     )
 
-    # Feed through existing vector pipeline
     return await sync_docs(http_client, openai_client, docs)

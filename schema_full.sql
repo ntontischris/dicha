@@ -73,6 +73,7 @@ CREATE TABLE payment_gateways (
   description         text DEFAULT '',
   supports            jsonb DEFAULT '[]',
   settings            jsonb DEFAULT '{}',
+  form_fields_meta    jsonb DEFAULT '{}',
   synced_at           timestamptz DEFAULT now(),
   UNIQUE (project_id, gateway_id)
 );

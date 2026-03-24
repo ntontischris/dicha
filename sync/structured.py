@@ -105,6 +105,7 @@ async def sync_structured_data(
                 "description": gw.description,
                 "supports": json.dumps(gw.supports),
                 "settings": json.dumps(gw.settings),
+                "form_fields_meta": json.dumps(gw.form_fields_meta) if gw.form_fields_meta else None,
             }
             for gw in wc.payment_gateways
         ]

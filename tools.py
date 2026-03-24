@@ -254,86 +254,490 @@ _ps_lock = threading.Lock()
 _PS_TTL = 300.0
 
 
-def search_plugin_settings(plugin_name: str = "") -> str:
-    """Search plugin settings for a specific plugin or list all configured plugins.
+# -- Tool: search_settings (structured query engine) -----------------
 
-    Queries the plugin_settings table directly via Supabase REST API.
-    Cached for 5 minutes per project.
+def search_settings(domain: str = "", query: str = "") -> str:
+    """Search structured settings by domain. Direct DB query, no vector search.
+
+    Domains: payments, shipping, tax, checkout, theme, plugin.
+    Multi-tenant: always scoped to current project_id.
     """
     project_id = config.get_project_id()
-    cache_key = f"{project_id}:{plugin_name.lower().strip()}"
-    now = time.monotonic()
+    if not domain:
+        return (
+            "ERROR: domain required. Options: payments, shipping, tax, checkout, theme, plugin.\n"
+            "Examples: search_settings('payments', 'COD fee'), search_settings('shipping', 'Θεσσαλονίκη')"
+        )
 
+    # Cache
+    cache_key = f"settings:{project_id}:{domain}:{query.lower().strip()}"
+    now = time.monotonic()
     with _ps_lock:
         if cache_key in _ps_cache:
             cached, ts = _ps_cache[cache_key]
             if now - ts < _PS_TTL:
                 return cached
 
-    # Query Supabase REST API directly
+    handler = _SETTINGS_HANDLERS.get(domain)
+    if not handler:
+        return f"ERROR: Unknown domain '{domain}'. Options: payments, shipping, tax, checkout, theme, plugin."
+
+    result = handler(project_id, query)
+
+    with _ps_lock:
+        _ps_cache[cache_key] = (result, now)
+    return result
+
+
+def _settings_payments(project_id: str, query: str) -> str:
+    """Query payment gateways with human-readable formatting."""
+    url = f"{config.SUPABASE_URL}/rest/v1/payment_gateways"
+    _select_cols = "gateway_id,title,method_title,enabled,description,settings,form_fields_meta"
+    _select_cols_fallback = "gateway_id,title,method_title,enabled,description,settings"
+    params = f"project_id=eq.{project_id}&select={_select_cols}"
+
+    # Filter by query if specific gateway mentioned
+    query_lower = query.lower()
+    if query_lower:
+        params += f"&or=(gateway_id.ilike.*{query_lower}*,title.ilike.*{query_lower}*,method_title.ilike.*{query_lower}*)"
+
+    try:
+        r = _http.get(f"{url}?{params}", headers=_HEADERS)
+        if r.status_code == 400:
+            # form_fields_meta column may not exist yet — retry without it
+            params = f"project_id=eq.{project_id}&select={_select_cols_fallback}"
+            if query_lower:
+                params += f"&or=(gateway_id.ilike.*{query_lower}*,title.ilike.*{query_lower}*,method_title.ilike.*{query_lower}*)"
+            r = _http.get(f"{url}?{params}", headers=_HEADERS)
+        r.raise_for_status()
+        rows = r.json()
+    except Exception as e:
+        return f"ERROR: {e}"
+
+    if not rows:
+        # Fallback: show all enabled gateways
+        try:
+            r = _http.get(f"{url}?project_id=eq.{project_id}&enabled=eq.true&select={_select_cols}", headers=_HEADERS)
+            if r.status_code == 400:
+                r = _http.get(f"{url}?project_id=eq.{project_id}&enabled=eq.true&select={_select_cols_fallback}", headers=_HEADERS)
+            r.raise_for_status()
+            rows = r.json()
+        except Exception:
+            pass
+        if not rows:
+            return "No payment gateways found for this project."
+
+    parts = []
+    for gw in rows:
+        settings = gw.get("settings", {})
+        if isinstance(settings, str):
+            settings = json.loads(settings)
+        form_fields = gw.get("form_fields_meta", {})
+        if isinstance(form_fields, str):
+            form_fields = json.loads(form_fields) if form_fields else {}
+
+        enabled = gw.get("enabled", False)
+        parts.append(f"=== {gw.get('method_title') or gw.get('title', '?')} ({gw.get('gateway_id', '?')}) ===")
+        parts.append(f"Status: {'Enabled' if enabled else 'Disabled'}")
+        if gw.get("description"):
+            parts.append(f"Description: {gw['description']}")
+
+        if settings:
+            parts.append("")
+            # Parse restriction/fee JSON blobs into readable format
+            _restriction_keys = {"restriction_settings", "fee_settings"}
+            for key, value in settings.items():
+                if key.startswith("_"):
+                    continue
+                label = key
+                if form_fields and key in form_fields:
+                    label = form_fields[key].get("title") or key
+
+                # Smart parsing for complex JSON settings
+                if key in _restriction_keys and isinstance(value, (str, dict)):
+                    parsed = value if isinstance(value, dict) else json.loads(value) if value else {}
+                    if parsed:
+                        parts.append(f"- {label}:")
+                        for rk, rv in parsed.items():
+                            if rv and rv not in ("0", 0, "fixed", "no", "", [], {}):
+                                parts.append(f"    {rk}: {_format_setting_value(rv)}")
+                    continue
+
+                val_str = _format_setting_value(value)
+                if len(val_str) > 300:
+                    val_str = val_str[:300] + "..."
+                parts.append(f"- {label}: {val_str}")
+        parts.append("")
+
+    return "\n".join(parts)
+
+
+def _settings_shipping(project_id: str, query: str) -> str:
+    """Query shipping zones + methods."""
+    # Get zones
+    zones_url = f"{config.SUPABASE_URL}/rest/v1/shipping_zones?project_id=eq.{project_id}&select=zone_id,zone_name,locations"
+    methods_url = f"{config.SUPABASE_URL}/rest/v1/shipping_methods?project_id=eq.{project_id}&enabled=eq.true&select=zone_id,zone_name,method_id,method_title,instance_id,cost,min_amount,requires,class_costs,no_class_cost,tax_status,settings,form_fields_meta"
+
+    try:
+        r_zones = _http.get(zones_url, headers=_HEADERS)
+        r_zones.raise_for_status()
+        zones = r_zones.json()
+        r_methods = _http.get(methods_url, headers=_HEADERS)
+        r_methods.raise_for_status()
+        methods = r_methods.json()
+    except Exception as e:
+        return f"ERROR: {e}"
+
+    if not methods:
+        return "No enabled shipping methods found."
+
+    # Filter by query
+    query_lower = query.lower()
+    filtered_zones = None
+    method_filter = None
+    if query_lower:
+        # Check for zone name match
+        for z in zones:
+            if query_lower in (z.get("zone_name", "")).lower():
+                filtered_zones = {z["zone_id"]}
+                break
+        # Check for method type
+        if "free" in query_lower or "δωρεάν" in query_lower:
+            method_filter = "free_shipping"
+        elif "flat" in query_lower or "χρέωση" in query_lower or "κόστος" in query_lower:
+            method_filter = "flat_rate"
+        elif "pickup" in query_lower or "παραλαβή" in query_lower:
+            method_filter = "local_pickup"
+
+    # Group methods by zone
+    zone_methods: dict[int, list] = {}
+    for m in methods:
+        zid = m.get("zone_id", 0)
+        if filtered_zones and zid not in filtered_zones:
+            continue
+        if method_filter and m.get("method_id") != method_filter:
+            continue
+        zone_methods.setdefault(zid, []).append(m)
+
+    if not zone_methods:
+        return f"No shipping methods matching '{query}'. Try a zone name or method type."
+
+    parts = []
+    for zid, meths in sorted(zone_methods.items()):
+        zone_name = meths[0].get("zone_name", "Unknown")
+        parts.append(f"=== Zone: {zone_name} (ID: {zid}) ===")
+        for m in meths:
+            mid = m.get("method_id", "?")
+            iid = m.get("instance_id", "?")
+            title = m.get("method_title", "?")
+            parts.append(f"  {title} ({mid}:{iid})")
+            if m.get("cost"):
+                parts.append(f"    Cost: {m['cost']}")
+            if m.get("min_amount"):
+                parts.append(f"    Min amount: {m['min_amount']}€")
+            if m.get("requires"):
+                parts.append(f"    Requires: {m['requires']}")
+            cc = m.get("class_costs")
+            if cc:
+                if isinstance(cc, str):
+                    cc = json.loads(cc)
+                if cc:
+                    parts.append(f"    Class costs: {json.dumps(cc, ensure_ascii=False)}")
+            if m.get("no_class_cost"):
+                parts.append(f"    No class cost: {m['no_class_cost']}")
+            # Show extra settings from form_fields_meta (human-readable labels)
+            extra_settings = m.get("settings", {})
+            form_fields = m.get("form_fields_meta", {})
+            if extra_settings and form_fields:
+                if isinstance(extra_settings, str):
+                    extra_settings = json.loads(extra_settings)
+                if isinstance(form_fields, str):
+                    form_fields = json.loads(form_fields) if form_fields else {}
+                _shown_keys = {"cost", "min_amount", "requires", "tax_status", "type", "title"}
+                for sk, sv in extra_settings.items():
+                    if sk in _shown_keys or sk.startswith("_") or sv in (None, "", [], {}):
+                        continue
+                    label = form_fields.get(sk, {}).get("title") or sk
+                    parts.append(f"    {label}: {_format_setting_value(sv)}")
+        parts.append("")
+
+    # Cap output
+    result = "\n".join(parts)
+    if len(result) > 4000:
+        result = result[:4000] + "\n... [truncated — use a more specific query]"
+    return result
+
+
+def _settings_tax(project_id: str, query: str) -> str:
+    """Query tax settings."""
+    url = f"{config.SUPABASE_URL}/rest/v1/tax_settings?project_id=eq.{project_id}"
+    try:
+        r = _http.get(url, headers=_HEADERS)
+        r.raise_for_status()
+        rows = r.json()
+    except Exception as e:
+        return f"ERROR: {e}"
+
+    if not rows:
+        return "No tax settings found."
+
+    tax = rows[0]
+    parts = ["=== Tax Settings ==="]
+    parts.append(f"Tax enabled: {tax.get('tax_enabled')}")
+    parts.append(f"Prices include tax: {tax.get('prices_include_tax')}")
+    parts.append(f"Tax based on: {tax.get('tax_based_on')}")
+    parts.append(f"Display in shop: {tax.get('tax_display_shop')}")
+    parts.append(f"Display in cart: {tax.get('tax_display_cart')}")
+
+    tax_classes = tax.get("tax_classes")
+    if isinstance(tax_classes, str):
+        tax_classes = json.loads(tax_classes)
+    if tax_classes:
+        parts.append(f"Tax classes: {', '.join(tax_classes)}")
+
+    tax_rates = tax.get("tax_rates")
+    if isinstance(tax_rates, str):
+        tax_rates = json.loads(tax_rates)
+    if tax_rates:
+        parts.append(f"\nTax Rates ({len(tax_rates)}):")
+        for rate in tax_rates[:20]:
+            parts.append(f"  {rate.get('name', '?')}: {rate.get('rate', '?')}% (class: {rate.get('class', 'standard')}, country: {rate.get('country', '*')})")
+
+    return "\n".join(parts)
+
+
+def _settings_checkout(project_id: str, query: str) -> str:
+    """Query general WooCommerce settings."""
+    url = f"{config.SUPABASE_URL}/rest/v1/wc_general_settings?project_id=eq.{project_id}"
+    try:
+        r = _http.get(url, headers=_HEADERS)
+        r.raise_for_status()
+        rows = r.json()
+    except Exception as e:
+        return f"ERROR: {e}"
+
+    if not rows:
+        return "No general settings found."
+
+    gen = rows[0]
+    parts = ["=== General / Checkout Settings ==="]
+    parts.append(f"Currency: {gen.get('currency')} (position: {gen.get('currency_position')})")
+    parts.append(f"Store country: {gen.get('store_country')}")
+    parts.append(f"Store city: {gen.get('store_city')}")
+    parts.append(f"Coupons enabled: {gen.get('enable_coupons')}")
+    parts.append(f"Guest checkout: {gen.get('enable_guest_checkout')}")
+    parts.append(f"Stock management: {gen.get('manage_stock')}")
+
+    # If full JSON available
+    settings_json = gen.get("settings_json")
+    if settings_json:
+        if isinstance(settings_json, str):
+            settings_json = json.loads(settings_json)
+        # Show extra fields not in the summary
+        extra_keys = set(settings_json.keys()) - {"currency", "currency_position", "store_country", "store_city", "enable_coupons", "enable_guest_checkout", "manage_stock"}
+        if extra_keys:
+            parts.append("\nAdditional settings:")
+            for key in sorted(extra_keys):
+                val = settings_json[key]
+                if val and str(val).strip():
+                    parts.append(f"  {key}: {val}")
+
+    return "\n".join(parts)
+
+
+def _settings_theme(project_id: str, query: str) -> str:
+    """Query theme settings with prefix filtering."""
+    url = f"{config.SUPABASE_URL}/rest/v1/theme_settings?project_id=eq.{project_id}"
+    try:
+        r = _http.get(url, headers=_HEADERS)
+        r.raise_for_status()
+        rows = r.json()
+    except Exception as e:
+        return f"ERROR: {e}"
+
+    if not rows:
+        return "No theme settings found."
+
+    ts = rows[0]
+    settings = ts.get("settings", {})
+    if isinstance(settings, str):
+        settings = json.loads(settings)
+
+    framework = settings.get("framework", "customizer")
+    framework_opts = settings.get("framework_options", {})
+    theme_mods = settings.get("theme_mods", {})
+    all_opts = {**framework_opts, **theme_mods}
+
+    slug = ts.get("theme_slug", "?")
+    parts = [f"=== Theme Settings: {slug} (framework: {framework}) ==="]
+    parts.append(f"Total options: {len(all_opts)}")
+
+    if not all_opts:
+        return "\n".join(parts)
+
+    # Prefix filter from query
+    query_lower = query.lower().strip()
+    filtered = {}
+    if query_lower:
+        for key, val in all_opts.items():
+            key_lower = key.lower()
+            if query_lower in key_lower or any(q in key_lower for q in query_lower.split()):
+                filtered[key] = val
+    else:
+        filtered = all_opts
+
+    if not filtered and query_lower:
+        # Try broader prefix match
+        prefix = query_lower.split()[0] if query_lower.split() else ""
+        for key, val in all_opts.items():
+            if key.lower().startswith(prefix):
+                filtered[key] = val
+
+    if not filtered:
+        # Show available prefixes
+        prefixes: dict[str, int] = {}
+        for key in all_opts:
+            p = key.split("_")[0] if "_" in key else key
+            prefixes[p] = prefixes.get(p, 0) + 1
+        parts.append(f"\nNo match for '{query}'. Available sections:")
+        for p, count in sorted(prefixes.items(), key=lambda x: -x[1])[:20]:
+            parts.append(f"  {p}: {count} options")
+        parts.append("\nTry: search_settings('theme', 'header') or search_settings('theme', 'shop')")
+        return "\n".join(parts)
+
+    # Group by prefix and show (cap at 50)
+    groups: dict[str, list[tuple[str, object]]] = {}
+    for key, val in list(filtered.items())[:50]:
+        prefix = key.split("_")[0] if "_" in key else "general"
+        groups.setdefault(prefix, []).append((key, val))
+
+    for group_name, items in groups.items():
+        parts.append(f"\n--- {group_name} ---")
+        for key, val in items:
+            parts.append(f"  {key}: {_format_setting_value(val)}")
+
+    if len(filtered) > 50:
+        parts.append(f"\n... showing 50/{len(filtered)} matches. Use more specific query.")
+
+    return "\n".join(parts)
+
+
+def _settings_plugin(project_id: str, query: str) -> str:
+    """Query plugin settings with key filtering. Replaces search_plugin_settings()."""
     url = f"{config.SUPABASE_URL}/rest/v1/plugin_settings"
     params = f"project_id=eq.{project_id}&select=plugin_slug,plugin_name,plugin_file,settings"
 
-    if plugin_name:
-        # Fuzzy match on slug or name
-        search_term = plugin_name.strip().lower()
-        params += f"&or=(plugin_slug.ilike.*{search_term}*,plugin_name.ilike.*{search_term}*)"
+    # Extract plugin name and feature keyword from query
+    query_parts = query.strip().split()
+    plugin_term = query_parts[0] if query_parts else ""
+    feature_terms = query_parts[1:] if len(query_parts) > 1 else []
+
+    if plugin_term:
+        params += f"&or=(plugin_slug.ilike.*{plugin_term}*,plugin_name.ilike.*{plugin_term}*)"
 
     try:
         r = _http.get(f"{url}?{params}", headers=_HEADERS)
         r.raise_for_status()
         rows = r.json()
     except Exception as e:
-        return f"ERROR fetching plugin settings: {e}"
+        return f"ERROR: {e}"
 
     if not rows:
-        if plugin_name:
-            return f"No settings found for plugin matching '{plugin_name}'. Try a different name or leave empty to list all."
-        return "No plugin settings synced for this project."
+        if plugin_term:
+            return f"No settings for plugin '{plugin_term}'. Use search_settings('plugin', '') to list all."
+        # List all
+        try:
+            r = _http.get(f"{url}?project_id=eq.{project_id}&select=plugin_slug,plugin_name", headers=_HEADERS)
+            r.raise_for_status()
+            all_rows = r.json()
+        except Exception:
+            all_rows = []
+        if not all_rows:
+            return "No plugin settings synced."
+        lines = [f"=== Plugin Settings ({len(all_rows)} plugins) ==="]
+        for row in all_rows:
+            lines.append(f"  {row.get('plugin_name', row.get('plugin_slug', '?'))}")
+        lines.append("\nUse: search_settings('plugin', 'plugin_name feature')")
+        return "\n".join(lines)
 
-    # Format output
-    if plugin_name and len(rows) <= 3:
-        # Detailed view for specific plugin(s)
-        parts = []
-        for row in rows:
-            slug = row.get("plugin_slug", "?")
-            name = row.get("plugin_name", slug)
-            settings = row.get("settings", {})
-            if isinstance(settings, str):
-                import json as _json
-                settings = _json.loads(settings)
+    parts = []
+    for row in rows[:3]:  # max 3 plugins per response
+        slug = row.get("plugin_slug", "?")
+        name = row.get("plugin_name", slug)
+        settings = row.get("settings", {})
+        if isinstance(settings, str):
+            settings = json.loads(settings)
 
-            parts.append(f"=== {name} ({slug}) ===")
-            if not settings:
-                parts.append("  (no settings collected)")
+        # Feature filter: if query has extra terms, filter keys
+        if feature_terms and isinstance(settings, dict):
+            filtered = {}
+            for key, val in settings.items():
+                key_lower = key.lower()
+                if any(ft.lower() in key_lower for ft in feature_terms):
+                    filtered[key] = val
+            if filtered:
+                settings = filtered
+
+        parts.append(f"=== {name} ({slug}) ===")
+        if not settings:
+            parts.append("  (no settings)")
+            continue
+
+        # Group by prefix
+        groups: dict[str, list[tuple[str, object]]] = {}
+        for key, val in settings.items():
+            if key.startswith("_"):
                 continue
+            # Skip empty values
+            if val is None or val == "" or val == [] or val == {}:
+                continue
+            prefix = key.split("_")[0] if "_" in key else "general"
+            groups.setdefault(prefix, []).append((key, val))
 
-            for key, value in settings.items():
-                # Truncate very long values
-                val_str = str(value)
+        shown = 0
+        for group_name, items in groups.items():
+            if shown >= 30:
+                parts.append(f"... [capped at 30 settings]")
+                break
+            parts.append(f"\n  --- {group_name} ---")
+            for key, val in items:
+                if shown >= 30:
+                    break
+                val_str = _format_setting_value(val)
                 if len(val_str) > 200:
                     val_str = val_str[:200] + "..."
                 parts.append(f"  {key}: {val_str}")
-        result = "\n".join(parts)
-    else:
-        # List view
-        lines = [f"=== Plugin Settings ({len(rows)} plugins) ==="]
-        for row in rows:
-            slug = row.get("plugin_slug", "?")
-            name = row.get("plugin_name", slug)
-            settings = row.get("settings", {})
-            if isinstance(settings, str):
-                import json as _json
-                settings = _json.loads(settings)
-            count = len(settings) if isinstance(settings, dict) else 0
-            lines.append(f"- {name} ({slug}): {count} settings")
-        lines.append("\nUse search_plugin_settings(plugin_name) for detailed settings of a specific plugin.")
-        result = "\n".join(lines)
+                shown += 1
+        parts.append("")
 
-    with _ps_lock:
-        _ps_cache[cache_key] = (result, now)
+    return "\n".join(parts)
 
-    return result
+
+def _format_setting_value(value: object) -> str:
+    """Format a setting value for human readability."""
+    if value is None:
+        return "(not set)"
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, list):
+        if not value:
+            return "(none)"
+        return ", ".join(str(v) for v in value[:20])
+    if isinstance(value, dict):
+        if not value:
+            return "(empty)"
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+_SETTINGS_HANDLERS = {
+    "payments": _settings_payments,
+    "shipping": _settings_shipping,
+    "tax": _settings_tax,
+    "checkout": _settings_checkout,
+    "theme": _settings_theme,
+    "plugin": _settings_plugin,
+}
 
 
 # -- Tool: get_shop_config -------------------------------------------
@@ -821,23 +1225,35 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
-            "name": "search_plugin_settings",
+            "name": "search_settings",
             "description": (
-                "Search the settings/configuration of WordPress plugins installed on this shop. "
-                "Use when the user asks about plugin settings, configuration, SEO setup, "
-                "caching settings, multilingual configuration, form settings, "
-                "or any functionality typically provided by a plugin. "
-                "Pass a plugin name to get its settings, or leave empty to list all."
+                "Search structured WooCommerce settings by domain. Returns exact configuration "
+                "data — payment gateways, shipping zones/methods, tax rates, checkout settings, "
+                "theme options, and plugin settings. Use for configuration questions (fees, "
+                "thresholds, enabled features, restrictions). For code questions, use search()."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "plugin_name": {
+                    "domain": {
+                        "type": "string",
+                        "enum": ["payments", "shipping", "tax", "checkout", "theme", "plugin"],
+                        "description": (
+                            "payments = gateways (COD, Stripe, bank). "
+                            "shipping = zones, methods, costs, free shipping thresholds. "
+                            "tax = rates, display, classes. "
+                            "checkout = currency, coupons, guest checkout. "
+                            "theme = theme/framework options. "
+                            "plugin = individual plugin settings (Yoast, Elementor, etc)."
+                        ),
+                    },
+                    "query": {
                         "type": "string",
                         "description": (
-                            "Name or slug of the plugin to look up "
-                            "(e.g. 'yoast', 'wp-rocket', 'elementor'). "
-                            "Leave empty to list all plugins with settings."
+                            "What to find. Examples: 'COD fee' (payments), "
+                            "'Thessaloniki free shipping' (shipping), "
+                            "'Yoast breadcrumbs' (plugin), 'header' (theme). "
+                            "For plugin domain: 'plugin_name feature' e.g. 'yoast breadcrumbs'."
                         ),
                     },
                 },
@@ -853,7 +1269,7 @@ _TOOL_MAP = {
     "search": search,
     "search_by_hook": search_by_hook,
     "get_shop_config": get_shop_config,
-    "search_plugin_settings": search_plugin_settings,
+    "search_settings": search_settings,
 }
 
 

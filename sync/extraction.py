@@ -65,6 +65,40 @@ def _categorize_by_hooks(hooks: list[str], text: str = "") -> tuple[str, str]:
     return "general", ""
 
 
+# -- Settings-code bridge: hooks that modify settings behavior ----------
+
+_SETTINGS_HOOK_PATTERNS: list[tuple[str, str]] = [
+    (r"woocommerce_.*payment.*gateway", "payments"),
+    (r"woocommerce_available_payment", "payments"),
+    (r"woocommerce_payment_complete", "payments"),
+    (r"woocommerce_package_rates", "shipping"),
+    (r"woocommerce_shipping", "shipping"),
+    (r"woocommerce_free_shipping", "shipping"),
+    (r"woocommerce_flat_rate", "shipping"),
+    (r"woocommerce_cart_calculate_fees", "checkout"),
+    (r"woocommerce_cart_subtotal", "checkout"),
+    (r"woocommerce_calculated_total", "checkout"),
+    (r"woocommerce_coupon_", "checkout"),
+    (r"woocommerce_get_price", "products"),
+    (r"woocommerce_product_get_price", "products"),
+    (r"woocommerce_tax_", "tax"),
+    (r"woocommerce_calculate_tax", "tax"),
+]
+
+
+def detect_settings_domains(hooks: list[str]) -> list[str]:
+    """Map extracted hooks to settings domains for cross-linking.
+
+    Returns keywords like 'settings:payments', 'settings:shipping'.
+    """
+    domains: set[str] = set()
+    for hook in hooks:
+        for pattern, domain in _SETTINGS_HOOK_PATTERNS:
+            if re.search(pattern, hook):
+                domains.add(f"settings:{domain}")
+    return list(domains)
+
+
 # -- Language detection ------------------------------------------------
 
 def _detect_language(code: str, file_path: str = "") -> str:
@@ -136,12 +170,15 @@ def extract_metadata(
     # Function calls (dc_*/dicha_*) ensure caller snippets share keywords with
     # the definition snippets, improving FTS co-discovery.
     func_calls = list(dict.fromkeys(_PHP_FUNC_CALLS.findall(code)))
+    # Settings-code bridge: tag code with related settings domains
+    settings_domains = detect_settings_domains(meta.hooks)
     kw_sources = [
         title,
         tags,
         " ".join(meta.functions),
         " ".join(func_calls),
         " ".join(meta.hooks[:5]),  # limit hook keywords
+        " ".join(settings_domains),  # settings cross-link
     ]
     raw_keywords = " ".join(kw_sources).split()
     # Deduplicate, filter short/common words

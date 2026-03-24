@@ -33,6 +33,20 @@ The context MUST include:
 Be specific and factual. Do NOT explain what the code does line by line. \
 Focus on WHAT it is and WHY someone would search for it."""
 
+_SETTINGS_SYSTEM_PROMPT = """\
+You are an expert at WooCommerce configuration analysis. Your job is to write a short \
+context summary (2-4 sentences) for a plugin/theme settings chunk that will be \
+used for search retrieval.
+
+The context MUST include:
+- The plugin or theme name and what it does
+- The KEY settings that affect store behavior (not all settings, just important ones)
+- What the current values mean in plain language
+- Which WooCommerce admin pages or hooks relate to these settings
+
+Be specific about VALUES. Do NOT just list setting names — explain what they mean. \
+Focus on WHAT the configuration does and WHY someone would search for it."""
+
 _USER_TEMPLATE = """\
 Full document title: {title}
 Document type: {doc_type}
@@ -69,7 +83,7 @@ async def generate_context_for_chunk(
             response = await client.chat.completions.create(
                 model=config.CONTEXT_MODEL,
                 messages=[
-                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {"role": "system", "content": _SETTINGS_SYSTEM_PROMPT if doc_type == "plugin_settings_doc" else _SYSTEM_PROMPT},
                     {"role": "user", "content": user_msg},
                 ],
                 max_tokens=200,
