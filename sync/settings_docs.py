@@ -216,24 +216,46 @@ async def generate_settings_documents(
             category="payments",
         ))
 
-    # -- Shipping methods (enabled, per zone) ---------------------------
+    # -- Shipping methods (grouped per zone to reduce document count) ----
     for zone in payload.data.woocommerce.shipping_zones:
-        for method in zone.methods:
-            if method.enabled != "yes":
-                continue
-            content = render_shipping_doc(
-                zone.model_dump(),
-                method.model_dump(),
-            )
-            if len(content) < 50:
-                continue
-            docs.append(DocPayload(
-                project_id=pid,
-                type="plugin_settings_doc",
-                title=f"Settings: {method.method_title} shipping ({zone.zone_name})",
-                content=content,
-                category="shipping",
-            ))
+        enabled_methods = [m for m in zone.methods if m.enabled == "yes"]
+        if not enabled_methods:
+            continue
+        zone_lines = [
+            f"# Shipping Zone: {zone.zone_name} (ID: {zone.zone_id})",
+            f"Methods: {len(enabled_methods)} enabled",
+            "",
+        ]
+        for method in enabled_methods:
+            method_dict = method.model_dump()
+            settings = method_dict.get("settings", {})
+            form_fields = method_dict.get("form_fields_meta", {})
+            zone_lines.append(f"## {method.method_title} ({method.method_id}:{method.instance_id})")
+            if settings and form_fields:
+                zone_lines.extend(_render_settings_block(settings, form_fields))
+            elif settings:
+                for key, value in settings.items():
+                    if not key.startswith("_"):
+                        zone_lines.append(f"- {key}: {_format_value(value)}")
+            else:
+                # Use basic fields from the model
+                if method.cost is not None:
+                    zone_lines.append(f"- Cost: {method.cost}")
+                if method.requires:
+                    zone_lines.append(f"- Requires: {method.requires}")
+                if method.min_amount:
+                    zone_lines.append(f"- Min amount: {method.min_amount}")
+            zone_lines.append("")
+        content = "\n".join(zone_lines)
+        if len(content) < 50:
+            continue
+        docs.append(DocPayload(
+            project_id=pid,
+            type="plugin_settings_doc",
+            title=f"Settings: Shipping zone {zone.zone_name}",
+            content=content,
+            category="shipping",
+        ))
 
     # -- Theme settings -------------------------------------------------
     ts = payload.data.theme_settings
