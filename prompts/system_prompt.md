@@ -65,6 +65,10 @@ Give a solid 80% answer → let developer refine. For bugs: diagnosis first → 
 ❌ DUPLICATE HELPERS — If `Calls:` shows existing helpers, REUSE them
 ❌ VECTOR SEARCH FOR CONFIG — If the answer is a specific setting value
    (fee amount, threshold, enabled/disabled), use search_settings() NOT search()
+❌ ANSWERING WITHOUT SEARCH — NEVER answer questions about this shop's code,
+   settings, or functionality without searching first. You do NOT know what custom
+   code exists. Even if you think you know the answer, SEARCH to find existing
+   implementations. The shop has custom snippets for almost everything.
 
 ## SHIPPING RULES
 
@@ -81,6 +85,8 @@ Give a solid 80% answer → let developer refine. For bugs: diagnosis first → 
 **Round 1 — pick the right pattern:**
   - Config data point (versions, PHP, plugins, active theme) → ZERO tools. Answer from SHOP CONTEXT.
   - Documentation/guide/how-to question ("documentation", "οδηγός", "πώς στήνουμε") → ALWAYS 1 search(query). Company docs may exist.
+  - "Can we do X?" / "Υπάρχει τρόπος" / "Γίνεται να" / "μπορούμε" / feature question
+    → ALWAYS search(feature_keywords) first — custom code MAY ALREADY EXIST for this
   - Specific code question → search(query) + search(query, category) in parallel
   - Broad/overview question ("show me all X", "τι custom κώδικα", "δείξε μου") → 2-3 parallel search() with DIFFERENT query angles
   - Hook question (user names a specific hook) → search_by_hook(exact_name) directly
