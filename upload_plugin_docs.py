@@ -100,17 +100,27 @@ def _sub_split(text: str, max_chars: int) -> list[str]:
 
 
 def _make_chunks(doc_title: str, sections: list[tuple[str, str]]) -> list[DocChunk]:
-    """Convert (section_name, section_text) pairs into DocChunk list."""
+    """Convert (section_name, section_text) pairs into DocChunk list.
+
+    Ensures unique titles via part numbers and dedup counters.
+    """
     chunks: list[DocChunk] = []
+    title_counts: dict[str, int] = {}
     for section_name, section_text in sections:
         section_text = section_text.strip()
         if len(section_text) < MIN_CHUNK_CHARS:
             continue
-        title = f"{doc_title} — {section_name}" if section_name else doc_title
-        for part in _sub_split(section_text, MAX_CHUNK_CHARS):
-            part = part.strip()
-            if len(part) >= MIN_CHUNK_CHARS:
-                chunks.append(DocChunk(title=title, content=part))
+        base_title = f"{doc_title} — {section_name}" if section_name else doc_title
+        parts = [p.strip() for p in _sub_split(section_text, MAX_CHUNK_CHARS)
+                 if len(p.strip()) >= MIN_CHUNK_CHARS]
+        for i, part in enumerate(parts):
+            title = f"{base_title} (part {i + 1})" if len(parts) > 1 else base_title
+            if title in title_counts:
+                title_counts[title] += 1
+                title = f"{title} [{title_counts[title]}]"
+            else:
+                title_counts[title] = 1
+            chunks.append(DocChunk(title=title, content=part))
     return chunks
 
 
@@ -302,9 +312,14 @@ def main() -> None:
         print("[dry-run] No upload performed.")
         return
 
+    # Upload per-file to avoid huge batches
     print("\nUploading...")
-    _upload(all_chunks, args.endpoint, args.secret)
-    print(f"Done. {len(all_chunks)} chunks uploaded.")
+    for path in md_files:
+        file_chunks = _chunk_file(path)
+        if file_chunks:
+            _upload(file_chunks, args.endpoint, args.secret)
+
+    print(f"\nDone. {len(all_chunks)} chunks uploaded across {len(md_files)} files.")
 
 
 if __name__ == "__main__":
