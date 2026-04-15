@@ -1170,7 +1170,10 @@ TOOL_SCHEMAS = [
             "name": "search",
             "description": (
                 "Search ALL project knowledge: code snippets, functions.php, theme files, "
-                "company guides, and project docs. Always query in English. "
+                "company guides, project docs, AND plugin reference docs. "
+                "Plugin reference docs explain what plugin settings mean and how they work "
+                "(use category='plugin_docs' to search only these). "
+                "Always query in English. "
                 "Tips: use function names from get_shop_config results as queries, "
                 "try without category first if results are poor, "
                 "search for 'dc_' prefix functions by name."
@@ -1188,7 +1191,7 @@ TOOL_SCHEMAS = [
                     },
                     "category": {
                         "type": "string",
-                        "enum": ["shipping", "payments", "checkout", "cart", "tax", "products", "orders", "emails", "theme", "security", "performance", "general"],
+                        "enum": ["shipping", "payments", "checkout", "cart", "tax", "products", "orders", "emails", "theme", "security", "performance", "general", "plugin_docs"],
                         "description": "Optional filter. Omit for broader results. Use when you know the exact domain.",
                     },
                 },
