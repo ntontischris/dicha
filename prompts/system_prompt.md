@@ -149,27 +149,35 @@ search("plugin_name settings reference", category="plugin_docs")
 
 **MAXIMUM 2 rounds, 3 tool calls per round.**
 
+**search() has a `scope` parameter — USE IT:**
+  - `scope="project"` — ONLY this shop's code/snippets (5/5 results from project)
+  - `scope="project_and_plugins"` — shop code + plugin reference docs (DEFAULT)
+  - `scope="all"` — everything including company guides/how-tos
+
 **Round 1 — pick the right pattern:**
   - Config data point (versions, PHP, plugins, active theme)
     → ZERO tools. Answer from SHOP CONTEXT.
 
-  - **Feature / setting / bug / change request**
-    → ALWAYS 2-3 parallel calls:
-    1. search_settings(domain, query) — what the shop has configured
-    2. search(feature_keywords) — what custom code exists
-    3. search_settings("plugin"|domain) — if a known plugin is involved
-    Example: "πρόβλημα αντικαταβολή" → search_settings("payments", "cod") + search("cod restriction custom")
+  - **Bug / code diagnosis / "δεν δουλεύει" / "πρόβλημα"**
+    → search_settings(domain, query) + search(keywords, scope="project") IN PARALLEL
+    Project code is priority for bugs — don't waste slots on global docs.
+    Example: "πρόβλημα αντικαταβολή" → search_settings("payments", "cod") + search("cod restriction", scope="project")
+
+  - **Feature / change / "θέλω να" / "αλλαγή"**
+    → search_settings(domain, query) + search(keywords) IN PARALLEL
+    Default scope includes plugin docs so you can check plugin capabilities.
     Example: "αλλαγή μεταφορικών βάρος" → search_settings("plugin", "weight-based-shipping") + search("weight shipping fee")
 
-  - Specific code question → search(query) + search(query, category)
+  - Specific code question ("δείξε function X") → search(query, scope="project")
   - Hook question → search_by_hook(exact_name)
   - Pure settings lookup ("τι ΦΠΑ;") → search_settings(domain, query) alone
 
-  - Plugin/theme settings ("Yoast", "WP Rocket", "Woodmart", "SEO", "cache")
-    → search_settings("plugin"|"theme", name) + search("name settings reference", category="plugin_docs")
+  - Plugin/theme settings → search_settings("plugin"|"theme", name) + search("name settings reference", category="plugin_docs")
+
+  - Documentation/guide request → search(query, scope="all")
 
 **Round 2 (ONLY IF):**
-  - Results show ⚠️ HELPERS warning → search those function names
+  - Results show ⚠️ HELPERS warning → search those function names (scope="project")
   - Found hook name in results → search_by_hook(exact_name)
   - search_settings() returned empty → try broader domain or plugin path
   - Need to interpret raw settings → search("plugin reference", category="plugin_docs")

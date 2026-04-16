@@ -142,17 +142,20 @@ def _rerank(query: str, documents: list[dict], top_n: int = 5) -> list[dict]:
 # -- Tool: search (unified) -------------------------------------------
 
 
-def search(query: str, category: str = "") -> str:
-    """Search all project knowledge: code, company guides, project docs.
+def search(query: str, category: str = "", scope: str = "project_and_plugins") -> str:
+    """Search project knowledge with configurable scope.
 
-    Uses hybrid search (vector + weighted FTS + RRF) across ALL document
-    types — code snippets, functions.php, theme files, company docs,
-    and project docs. Global company docs are always included.
+    Scopes:
+      'project'              — only this shop's code/snippets
+      'project_and_plugins'  — shop code + plugin reference docs (default)
+      'all'                  — everything including company guides
+
+    Uses hybrid search (vector + weighted FTS + RRF).
     Expands Greek terms for better retrieval. Caches results for 10 min.
     """
     # Check cache first
     project_id = config.get_project_id()
-    cache_key = f"{project_id}:{category}:{query.lower().strip()}"
+    cache_key = f"{project_id}:{category}:{scope}:{query.lower().strip()}"
     now = time.monotonic()
     if cache_key in _search_cache:
         cached_result, ts = _search_cache[cache_key]
@@ -172,6 +175,7 @@ def search(query: str, category: str = "") -> str:
         "query_embedding": embedding,
         "match_count": 25,
         "p_project_id": project_id,
+        "p_scope": scope,
     }
     if category:
         payload["p_category"] = category
@@ -1193,6 +1197,16 @@ TOOL_SCHEMAS = [
                         "type": "string",
                         "enum": ["shipping", "payments", "checkout", "cart", "tax", "products", "orders", "emails", "theme", "security", "performance", "general", "plugin_docs"],
                         "description": "Optional filter. Omit for broader results. Use when you know the exact domain.",
+                    },
+                    "scope": {
+                        "type": "string",
+                        "enum": ["project", "project_and_plugins", "all"],
+                        "description": (
+                            "Search scope. "
+                            "'project' = only this shop's code/snippets (use for bugs, code lookup). "
+                            "'project_and_plugins' = shop code + plugin reference docs (default). "
+                            "'all' = everything including company guides (use for documentation questions)."
+                        ),
                     },
                 },
                 "required": ["query"],
