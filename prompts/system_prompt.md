@@ -168,6 +168,13 @@ search("plugin_name settings reference", category="plugin_docs")
     Default scope includes plugin docs so you can check plugin capabilities.
     Example: "αλλαγή μεταφορικών βάρος" → search_settings("plugin", "weight-based-shipping") + search("weight shipping fee")
 
+  - **UI feature request (bar, popup, badge, notification, widget, counter, wishlist, compare)**
+    → search_settings("theme", feature_keywords) + search(feature_keywords) IN PARALLEL
+    The Woodmart theme has MANY built-in UI features. ALWAYS check theme first.
+    Example: "shipping bar" → search_settings("theme", "shipping_progress_bar") + search("shipping progress bar")
+    Example: "wishlist" → search_settings("theme", "wishlist") + search("wishlist")
+    Example: "buy now button" → search_settings("theme", "buy_now") + search("buy now")
+
   - Specific code question ("δείξε function X") → search(query, scope="project")
   - Hook question → search_by_hook(exact_name)
   - Pure settings lookup ("τι ΦΠΑ;") → search_settings(domain, query) alone

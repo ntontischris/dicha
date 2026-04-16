@@ -934,7 +934,7 @@ def _format_config(data: dict) -> str:
         parts.append(f"\n=== Active Plugins ({len(plugins)}) ===")
         parts.append(", ".join(names))
 
-    # Theme settings
+    # Theme settings — with feature detection for key WooCommerce features
     theme_settings = data.get("theme_settings") or []
     if theme_settings:
         ts_list = theme_settings if isinstance(theme_settings, list) else [theme_settings]
@@ -949,9 +949,45 @@ def _format_config(data: dict) -> str:
             parts.append(f"\n=== Theme Settings ({slug}) ===")
             parts.append(f"Framework: {framework}")
             if isinstance(settings, dict):
-                opt_count = len(settings.get("framework_options", {})) + len(settings.get("theme_mods", {}))
+                all_opts = {**settings.get("framework_options", {}), **settings.get("theme_mods", {})}
+                opt_count = len(all_opts)
                 parts.append(f"Total options: {opt_count}")
-                parts.append("(Use search() for specific theme settings)")
+
+                # Detect key WooCommerce features from theme options
+                # Woodmart uses varied naming: some _enabled, some plain bool, some 0/1
+                _THEME_FEATURES = [
+                    ("shipping_progress_bar_enabled", "Free Shipping Progress Bar (cart/checkout)"),
+                    ("shipping_progress_bar_amount", "Free Shipping Progress Bar (cart/checkout)"),
+                    ("buy_now_enabled", "Buy Now Button"),
+                    ("my_account_wishlist", "Wishlist"),
+                    ("compare", "Product Compare"),
+                    ("quick_view", "Quick View Popup"),
+                    ("quick_shop_variable", "Quick Shop (add to cart from archive)"),
+                    ("catalog_mode", "Catalog Mode (hide prices/add-to-cart)"),
+                    ("sold_counter_enabled", "Sold Counter"),
+                    ("counter_visitor_enabled", "Visitor Counter"),
+                    ("estimate_delivery_enabled", "Estimated Delivery Date"),
+                    ("free_gifts_enabled", "Free Gifts with Purchase"),
+                    ("frequently_bought_enabled", "Frequently Bought Together"),
+                    ("waitlist_enabled", "Waitlist (back-in-stock)"),
+                    ("size_guides", "Size Guides"),
+                    ("promo_popup", "Promo Popup"),
+                ]
+                detected = []
+                seen_labels: set[str] = set()
+                for key, label in _THEME_FEATURES:
+                    if key in all_opts and label not in seen_labels:
+                        val = all_opts[key]
+                        status = "ON" if val and str(val) not in ("0", "false", "", "False") else "OFF"
+                        detected.append(f"{label}: {status}")
+                        seen_labels.add(label)
+
+                if detected:
+                    parts.append("Built-in theme features (use search_settings('theme', feature) for details):")
+                    for feat in detected:
+                        parts.append(f"  - {feat}")
+                parts.append("NOTE: Theme may have MORE features not listed above (e.g. shipping progress bar, buy now, delivery estimates).")
+                parts.append("For UI feature requests, ALWAYS check: search('woodmart FEATURE_NAME', category='plugin_docs')")
 
     return "\n".join(parts)
 
