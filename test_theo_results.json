@@ -1,0 +1,191 @@
+[
+  {
+    "name": "1. Read Smart COD settings",
+    "passed": false,
+    "checks": [
+      {
+        "check": "Mentions Smart COD",
+        "keyword": "smart cod",
+        "passed": false
+      },
+      {
+        "check": "Finds cart_amount_restriction",
+        "keyword": "500",
+        "passed": true
+      },
+      {
+        "check": "Finds restrictions",
+        "keyword": "restriction",
+        "passed": true
+      },
+      {
+        "check": "Has source attribution",
+        "keyword": "[plugin",
+        "passed": false
+      }
+    ],
+    "tools": [
+      "search_settings"
+    ],
+    "cost": 0.0066812,
+    "answer_preview": "Υπάρχει ενεργό το plugin/μέθοδος \"Αντικαταβολή (cod)\" με τις εξής ρυθμίσεις:\n\n- Ενεργοποιημένη η αντικαταβολή\n- Περιορισμός ποσού καλαθιού: πάνω από 500.001€ (cart_amount_restriction)\n- Περιορισμός σε συγκεκριμένες κατηγορίες προϊόντων (IDs: 4193, 2523, 2517, 2531) με λειτουργία \"one_product\"\n- Περι",
+    "time_s": 9.9
+  },
+  {
+    "name": "2. Prefer plugin over code (COD fee)",
+    "passed": true,
+    "checks": [
+      {
+        "check": "Suggests Smart COD plugin",
+        "keyword": "smart cod",
+        "passed": true
+      },
+      {
+        "check": "Mentions extra_fee setting",
+        "keyword": "extra_fee",
+        "passed": true
+      },
+      {
+        "check": "Does NOT lead with custom PHP (inverted: should NOT appear)",
+        "keyword": "add_action",
+        "passed": true
+      }
+    ],
+    "tools": [
+      "search_settings",
+      "search"
+    ],
+    "cost": 0.0080716,
+    "answer_preview": "Η αντικαταβολή (COD) σε αυτό το κατάστημα χρησιμοποιεί το plugin Smart COD, το οποίο υποστηρίζει προσθήκη κόστους αντικαταβολής μέσω της ρύθμισης `extra_fee`. \n\nΥπάρχει ήδη ρύθμιση \"extra_fee\" που καθορίζει το βασικό πρόσθετο κόστος για την αντικαταβολή. Αυτή η ρύθμιση μπορεί να είναι σταθερό ποσό ή",
+    "time_s": 13.6
+  },
+  {
+    "name": "3. Source attribution (snippet location)",
+    "passed": true,
+    "checks": [
+      {
+        "check": "Mentions function name",
+        "keyword": "dc_add_plakakia",
+        "passed": true
+      },
+      {
+        "check": "Has source: snippet or functions.php",
+        "keyword": "snippet",
+        "passed": true
+      },
+      {
+        "check": "Mentions shipping class",
+        "keyword": "plakakia",
+        "passed": true
+      }
+    ],
+    "tools": [
+      "search_settings",
+      "search"
+    ],
+    "cost": 0.0147784,
+    "answer_preview": "Ο μηχανισμός υπολογισμού μεταφορικών για πλακάκια δουλεύει με βάση το εξής ενεργό snippet `dc_add_plakakia_fee_for_shipping_new` **[code_snippets_plugin]** που συνδέεται στο hook `woocommerce_cart_calculate_fees`.\n\n### Πώς λειτουργεί:\n\n1. **Εντοπισμός προϊόντων πλακάκια**: Στο καλάθι ελέγχεται η συν",
+    "time_s": 17.5
+  },
+  {
+    "name": "4. Caching bug → WP Rocket",
+    "passed": false,
+    "checks": [
+      {
+        "check": "Mentions WP Rocket / cache",
+        "keyword": "rocket",
+        "passed": false
+      },
+      {
+        "check": "Suggests clearing cache",
+        "keyword": "cache",
+        "passed": true
+      }
+    ],
+    "tools": [
+      "search_settings",
+      "search"
+    ],
+    "cost": 0.0072908,
+    "answer_preview": "Πιθανοί λόγοι για εμφάνιση παλιών τιμών προϊόντων μετά από αλλαγές:\n\n1. Cache plugins: Δεν φαίνεται να υπάρχει ρύθμιση ενεργού plugin caching σχετική με την cache τιμών (δεν υπάρχουν cache plugins με ρυθμίσεις στο site).\n2. WooCommerce cache/transients: Καμία ειδική ρύθμιση cache WooCommerce για τιμ",
+    "time_s": 11.5
+  },
+  {
+    "name": "5. Theme capability (shipping bar)",
+    "passed": true,
+    "checks": [
+      {
+        "check": "Mentions Woodmart shipping bar feature",
+        "keyword": "shipping progress bar",
+        "passed": true
+      },
+      {
+        "check": "Gives admin path",
+        "keyword": "theme options",
+        "passed": true
+      },
+      {
+        "check": "Does NOT write custom PHP (inverted: should NOT appear)",
+        "keyword": "add_action",
+        "passed": true
+      }
+    ],
+    "tools": [
+      "search_settings",
+      "search"
+    ],
+    "cost": 0.0077792,
+    "answer_preview": "Ναι, το θέμα (Woodmart Child) υποστηρίζει εμφάνιση μπάρας που δείχνει πόσο λείπει για δωρεάν μεταφορικά.\n\nΑκριβώς, η ρύθμιση βρίσκεται στο:\n\n**Theme Options > Shop > Shipping Progress Bar**\n\nΕκεί μπορείς να ενεργοποιήσεις τη μπάρα, να ορίσεις το όριο δωρεάν μεταφορικών (είτε από τις ρυθμίσεις WooCom",
+    "time_s": 10.1
+  },
+  {
+    "name": "6. Cross-reference settings + code",
+    "passed": true,
+    "checks": [
+      {
+        "check": "Finds shipping zone settings",
+        "keyword": "zone",
+        "passed": true
+      },
+      {
+        "check": "Finds custom code",
+        "keyword": "dc_",
+        "passed": true
+      },
+      {
+        "check": "Has source attribution",
+        "keyword": "[",
+        "passed": true
+      }
+    ],
+    "tools": [
+      "search_settings",
+      "search"
+    ],
+    "cost": 0.0152932,
+    "answer_preview": "Βρήκα τα εξής για τα μεταφορικά στη Θεσσαλονίκη:\n\n1. Η ζώνη \"Θεσσαλονίκη (Εκτός πόλης)\" έχει ρύθμιση δωρεάν μεταφορικών για παραγγελίες άνω των 500€ (free_shipping:179) και flat rate μεταφορικά με κόστη ανά κλάση αποστολής (π.χ. \"diplo-dema\", \"epiplo-mpaniou\" κλπ) που υπολογίζονται επί της ποσότητας",
+    "time_s": 19.0
+  },
+  {
+    "name": "7. Multi-turn: COD follow-up",
+    "passed": true,
+    "checks": [
+      {
+        "check": "First answer has COD settings",
+        "keyword": "restriction",
+        "passed": true
+      },
+      {
+        "check": "Follow-up finds zone restriction",
+        "keyword": "zone",
+        "passed": true
+      }
+    ],
+    "tools": [
+      "search_settings"
+    ],
+    "cost": 0.010336399999999999,
+    "answer_preview": "Η αντικαταβολή στο eshop σας έχει τις εξής ρυθμίσεις:\n\n- Ενεργοποιημένη (enabled)\n- Τίτλος: \"Αντικαταβολή\"\n- Περιγραφή και οδηγίες: \"Πληρωμή με μετρητά κατά την παράδοση\"\n- Δεν είναι ενεργοποιημένη για συγκεκριμένες μεθόδους αποστολής (κανένα shipping method δεν έχει επιλεγεί)\n- Δεν επιτρέπεται για ",
+    "time_s": 10.2
+  }
+]
