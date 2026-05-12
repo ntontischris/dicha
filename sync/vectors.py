@@ -324,7 +324,7 @@ async def _upsert_parents_returning_ids(
     if not rows:
         return {}
 
-    url = f"{config.SUPABASE_URL}/rest/v1/documents?select=id,source_id"
+    url = f"{config.SUPABASE_URL}/rest/v1/documents?select=id,source_id&on_conflict=project_id,source_id"
     r = await client.post(url, headers=_RETURNING_HEADERS, json=rows)
     if r.status_code >= 400:
         logger.error("Parent upsert failed %d: %s", r.status_code, r.text[:500])
@@ -344,7 +344,7 @@ async def _upsert_documents(
     batch_size: int = 200,
 ) -> None:
     """Upsert document rows into Supabase."""
-    url = f"{config.SUPABASE_URL}/rest/v1/documents"
+    url = f"{config.SUPABASE_URL}/rest/v1/documents?on_conflict=project_id,source_id"
 
     for i in range(0, len(rows), batch_size):
         batch = rows[i : i + batch_size]
