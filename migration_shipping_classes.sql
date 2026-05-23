@@ -6,8 +6,17 @@
 --
 -- Run ONCE in the Supabase SQL Editor. Additive + safe (no data loss).
 -- After running it, trigger a fresh sync from WP so the table populates.
+--
+-- ABOUT THE TWO SUPABASE WARNINGS:
+--   • "Row Level Security": HANDLED below — Part 1 enables RLS + the same
+--     service-role policy every other table in this schema already uses.
+--   • "Destructive operations": this refers to the DELETE lines INSIDE the
+--     clear_project_data function DEFINITION (Part 2). They do NOT run now —
+--     they only describe what the function does per-project during a sync.
+--     Running this migration DELETES NOTHING. Safe to confirm and run.
 -- ═══════════════════════════════════════════════════════════════════
 
+-- ── Part 1: table + RLS (purely additive) ───────────────────────────
 CREATE TABLE IF NOT EXISTS shipping_classes (
   id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   project_id  text NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
@@ -22,7 +31,13 @@ CREATE TABLE IF NOT EXISTS shipping_classes (
 
 CREATE INDEX IF NOT EXISTS idx_shipping_classes_project ON shipping_classes(project_id);
 
--- clear_project_data runs before every re-sync; it must also clear this table.
+-- RLS — identical posture to every other table in this schema (service-role access).
+ALTER TABLE shipping_classes ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Service role full access" ON shipping_classes;
+CREATE POLICY "Service role full access" ON shipping_classes FOR ALL USING (true) WITH CHECK (true);
+
+-- ── Part 2: clear_project_data must also clear this table on re-sync ──
+-- (The DELETEs below run per-project ONLY when a sync calls this function.)
 CREATE OR REPLACE FUNCTION clear_project_data(p_project_id text)
 RETURNS void
 LANGUAGE plpgsql

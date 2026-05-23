@@ -615,6 +615,7 @@ ALTER TABLE wc_general_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE active_plugins      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE plugin_settings     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE theme_settings      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE shipping_classes    ENABLE ROW LEVEL SECURITY;
 ALTER TABLE documents           ENABLE ROW LEVEL SECURITY;
 
 -- Service role can do everything (webhook uses service_role key)
@@ -627,6 +628,7 @@ CREATE POLICY "Service role full access" ON wc_general_settings FOR ALL USING (t
 CREATE POLICY "Service role full access" ON active_plugins      FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Service role full access" ON plugin_settings     FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Service role full access" ON theme_settings      FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Service role full access" ON shipping_classes    FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Service role full access" ON documents           FOR ALL USING (true) WITH CHECK (true);
 
 
