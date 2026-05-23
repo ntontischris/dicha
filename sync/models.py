@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, field_validator
 
 # -- Webhook payload (matches WooCommerce plugin output exactly) -------
 
+
 class PaymentGateway(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -97,6 +98,16 @@ class GeneralSettings(BaseModel):
     _error: str | None = None
 
 
+class ShippingClass(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    term_id: int = 0
+    name: str = ""
+    slug: str = ""
+    description: str = ""
+    count: int = 0
+
+
 class WooCommerceData(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -104,6 +115,7 @@ class WooCommerceData(BaseModel):
     active: bool = False
     payment_gateways: list[PaymentGateway] = []
     shipping_zones: list[ShippingZone] = []
+    shipping_classes: list[ShippingClass] = []
     tax_settings: TaxSettings = TaxSettings()
     general_settings: GeneralSettings = GeneralSettings()
 
@@ -221,6 +233,7 @@ class WebhookPayload(BaseModel):
 
 
 # -- Doc ingestion payloads -------------------------------------------
+
 
 class DocPayload(BaseModel):
     """Single document upload (company doc or project doc)."""

@@ -37,6 +37,7 @@ _cohere_client = None
 if config.COHERE_API_KEY:
     try:
         import cohere
+
         _cohere_client = cohere.Client(api_key=config.COHERE_API_KEY)
     except ImportError:
         pass
@@ -50,6 +51,7 @@ _CTX_TTL = 300.0
 
 
 # -- Supabase helpers -------------------------------------------------
+
 
 def _rpc(function_name: str, payload: dict) -> dict | list:
     url = f"{config.SUPABASE_URL}/rest/v1/rpc/{function_name}"
@@ -105,6 +107,7 @@ def _embed_query(query: str, category: str = "") -> list[float]:
 
 
 # -- Reranker ---------------------------------------------------------
+
 
 def _rerank(query: str, documents: list[dict], top_n: int = 5) -> list[dict]:
     """Rerank documents using Cohere cross-encoder.
@@ -208,16 +211,20 @@ def search(query: str, category: str = "", scope: str = "project_and_plugins") -
 
 # -- Tool: search_by_hook ---------------------------------------------
 
+
 def search_by_hook(hook_name: str) -> str:
     """Find all code that uses a specific WordPress/WooCommerce hook.
 
     Direct lookup via GIN index — fast and precise.
     """
-    result = _rpc("search_by_hook", {
-        "p_hook_name": hook_name,
-        "p_project_id": config.get_project_id(),
-        "match_count": 5,
-    })
+    result = _rpc(
+        "search_by_hook",
+        {
+            "p_hook_name": hook_name,
+            "p_project_id": config.get_project_id(),
+            "match_count": 5,
+        },
+    )
     if isinstance(result, dict) and "error" in result:
         return f"ERROR: {result['error']}"
     if not result:
@@ -229,7 +236,9 @@ def search_by_hook(hook_name: str) -> str:
     for doc in result:
         body = doc.get("body") or doc.get("text") or ""
         func_defs.update(_FUNC_DEF_RE.findall(body))
-    header_lines = [f"QUICK_REF: {len(result)} results for hook '{hook_name}' ({active_count} active)"]
+    header_lines = [
+        f"QUICK_REF: {len(result)} results for hook '{hook_name}' ({active_count} active)"
+    ]
     if func_defs:
         header_lines.append(f"  Functions: {', '.join(sorted(func_defs)[:10])}")
     header_lines.append("---")
@@ -259,6 +268,7 @@ _PS_TTL = 300.0
 
 
 # -- Tool: search_settings (structured query engine) -----------------
+
 
 def search_settings(domain: str = "", query: str = "") -> str:
     """Search structured settings by domain. Direct DB query, no vector search.
@@ -293,10 +303,88 @@ def search_settings(domain: str = "", query: str = "") -> str:
     return result
 
 
+# Smart COD stores each restriction as a bare value plus a per-restriction mode
+# in `restriction_settings` (0 = exclude: disable COD when matched; 1 = include:
+# enable COD only when matched). `cart_amount_restriction` disables COD when the
+# cart total is >= the value — i.e. a MAXIMUM. We translate these to explicit text
+# so the model never has to guess (it used to flip-flop min vs max).
+_COD_RESTRICTION_FIELDS = {
+    "shipping_zone_restrictions": "Shipping zone IDs",
+    "country_restrictions": "Countries",
+    "state_restrictions": "States/regions",
+    "restrict_postals": "Postal codes",
+    "city_restrictions": "Cities",
+    "user_role_restriction": "User roles",
+    "category_restriction": "Product category IDs",
+    "product_restriction": "Product/variation IDs",
+    "shipping_class_restriction": "Shipping class IDs",
+    "shipping_zone_method_restriction": "Zone_method (zoneID_methodInstanceID)",
+}
+
+_COD_RESTRICTION_HANDLED = set(_COD_RESTRICTION_FIELDS) | {
+    "restriction_settings",
+    "fee_settings",
+    "cod_unavailable_message",
+    "cart_amount_restriction",
+    "cart_amount_mode",
+    "category_restriction_mode",
+    "product_restriction_mode",
+    "shipping_class_restriction_mode",
+}
+
+
+def _interpret_cod_restrictions(settings: dict) -> list[str]:
+    """Translate Smart COD restriction fields into explicit, unambiguous lines."""
+    modes = settings.get("restriction_settings") or {}
+    if isinstance(modes, str):
+        try:
+            modes = json.loads(modes)
+        except (ValueError, TypeError):
+            modes = {}
+
+    def _mode(key: str) -> str:
+        return (
+            "include — COD ONLY when matches"
+            if str(modes.get(key, 0)) == "1"
+            else "exclude — COD disabled when matches"
+        )
+
+    lines: list[str] = []
+
+    amount = settings.get("cart_amount_restriction")
+    if amount not in (None, "", "0", 0, "0.0"):
+        basis = settings.get("cart_amount_mode") or []
+        if isinstance(basis, str):
+            try:
+                basis = json.loads(basis)
+            except (ValueError, TypeError):
+                basis = [basis]
+        basis_txt = f" Cart total basis: {', '.join(basis)}." if basis else ""
+        lines.append(
+            f"Cart amount: COD is DISABLED when cart total >= {amount} EUR "
+            f"— allowed ONLY UP TO {amount} EUR (maximum).{basis_txt}"
+        )
+
+    for key, label in _COD_RESTRICTION_FIELDS.items():
+        value = settings.get(key)
+        if not value or value in ("0", 0):
+            continue
+        items = value if isinstance(value, list) else [value]
+        trigger = settings.get(f"{key}_mode")
+        trigger_txt = f", triggers when {trigger}" if trigger else ""
+        lines.append(
+            f"{label}: {', '.join(str(i) for i in items)} [{_mode(key)}{trigger_txt}]"
+        )
+
+    return lines
+
+
 def _settings_payments(project_id: str, query: str) -> str:
     """Query payment gateways with human-readable formatting."""
     url = f"{config.SUPABASE_URL}/rest/v1/payment_gateways"
-    _select_cols = "gateway_id,title,method_title,enabled,description,settings,form_fields_meta"
+    _select_cols = (
+        "gateway_id,title,method_title,enabled,description,settings,form_fields_meta"
+    )
     _select_cols_fallback = "gateway_id,title,method_title,enabled,description,settings"
     params = f"project_id=eq.{project_id}&select={_select_cols}"
 
@@ -321,9 +409,15 @@ def _settings_payments(project_id: str, query: str) -> str:
     if not rows:
         # Fallback: show all enabled gateways
         try:
-            r = _http.get(f"{url}?project_id=eq.{project_id}&enabled=eq.true&select={_select_cols}", headers=_HEADERS)
+            r = _http.get(
+                f"{url}?project_id=eq.{project_id}&enabled=eq.true&select={_select_cols}",
+                headers=_HEADERS,
+            )
             if r.status_code == 400:
-                r = _http.get(f"{url}?project_id=eq.{project_id}&enabled=eq.true&select={_select_cols_fallback}", headers=_HEADERS)
+                r = _http.get(
+                    f"{url}?project_id=eq.{project_id}&enabled=eq.true&select={_select_cols_fallback}",
+                    headers=_HEADERS,
+                )
             r.raise_for_status()
             rows = r.json()
         except Exception:
@@ -341,17 +435,32 @@ def _settings_payments(project_id: str, query: str) -> str:
             form_fields = json.loads(form_fields) if form_fields else {}
 
         enabled = gw.get("enabled", False)
-        parts.append(f"=== {gw.get('method_title') or gw.get('title', '?')} ({gw.get('gateway_id', '?')}) ===")
+        parts.append(
+            f"=== {gw.get('method_title') or gw.get('title', '?')} ({gw.get('gateway_id', '?')}) ==="
+        )
         parts.append(f"Status: {'Enabled' if enabled else 'Disabled'}")
         if gw.get("description"):
             parts.append(f"Description: {gw['description']}")
 
         if settings:
             parts.append("")
+            # Smart COD: translate restriction fields into explicit text so the
+            # model never has to guess min-vs-max (see _interpret_cod_restrictions).
+            cod_lines = (
+                _interpret_cod_restrictions(settings)
+                if "restriction_settings" in settings
+                else []
+            )
+            if cod_lines:
+                parts.append("- COD restrictions:")
+                for cod_line in cod_lines:
+                    parts.append(f"    {cod_line}")
+            skip_keys = _COD_RESTRICTION_HANDLED if cod_lines else set()
+
             # Parse restriction/fee JSON blobs into readable format
             _restriction_keys = {"restriction_settings", "fee_settings"}
             for key, value in settings.items():
-                if key.startswith("_"):
+                if key.startswith("_") or key in skip_keys:
                     continue
                 label = key
                 if form_fields and key in form_fields:
@@ -359,7 +468,13 @@ def _settings_payments(project_id: str, query: str) -> str:
 
                 # Smart parsing for complex JSON settings
                 if key in _restriction_keys and isinstance(value, (str, dict)):
-                    parsed = value if isinstance(value, dict) else json.loads(value) if value else {}
+                    parsed = (
+                        value
+                        if isinstance(value, dict)
+                        else json.loads(value)
+                        if value
+                        else {}
+                    )
                     if parsed:
                         parts.append(f"- {label}:")
                         for rk, rv in parsed.items():
@@ -374,6 +489,21 @@ def _settings_payments(project_id: str, query: str) -> str:
         parts.append("")
 
     return "\n".join(parts)
+
+
+def _format_shipping_class_list(rows: list[dict]) -> str:
+    """Render the shop's real shipping classes — the authoritative slugs/IDs to use
+    in generated code. Empty string when the shop has none."""
+    if not rows:
+        return ""
+    lines = [
+        "Shipping classes on this shop (use these EXACT slugs in code — never invent):"
+    ]
+    for r in rows:
+        lines.append(
+            f"  - slug `{r.get('slug', '')}` — {r.get('name', '')} [term_id {r.get('term_id')}]"
+        )
+    return "\n".join(lines)
 
 
 def _settings_shipping(project_id: str, query: str) -> str:
@@ -392,6 +522,19 @@ def _settings_shipping(project_id: str, query: str) -> str:
     except Exception as e:
         return f"ERROR: {e}"
 
+    # Authoritative shipping classes for this shop (real slugs/IDs for code-gen).
+    class_block = ""
+    try:
+        classes_url = (
+            f"{config.SUPABASE_URL}/rest/v1/shipping_classes"
+            f"?project_id=eq.{project_id}&select=slug,name,term_id&order=slug"
+        )
+        r_classes = _http.get(classes_url, headers=_HEADERS)
+        if r_classes.status_code == 200:
+            class_block = _format_shipping_class_list(r_classes.json())
+    except Exception:
+        class_block = ""
+
     if not methods:
         return "No enabled shipping methods found."
 
@@ -408,7 +551,9 @@ def _settings_shipping(project_id: str, query: str) -> str:
         # Check for method type
         if "free" in query_lower or "δωρεάν" in query_lower:
             method_filter = "free_shipping"
-        elif "flat" in query_lower or "χρέωση" in query_lower or "κόστος" in query_lower:
+        elif (
+            "flat" in query_lower or "χρέωση" in query_lower or "κόστος" in query_lower
+        ):
             method_filter = "flat_rate"
         elif "pickup" in query_lower or "παραλαβή" in query_lower:
             method_filter = "local_pickup"
@@ -424,9 +569,11 @@ def _settings_shipping(project_id: str, query: str) -> str:
         zone_methods.setdefault(zid, []).append(m)
 
     if not zone_methods:
-        return f"No shipping methods matching '{query}'. Try a zone name or method type."
+        return (
+            f"No shipping methods matching '{query}'. Try a zone name or method type."
+        )
 
-    parts = []
+    parts = [class_block, ""] if class_block else []
     for zid, meths in sorted(zone_methods.items()):
         zone_name = meths[0].get("zone_name", "Unknown")
         parts.append(f"=== Zone: {zone_name} (ID: {zid}) ===")
@@ -446,7 +593,9 @@ def _settings_shipping(project_id: str, query: str) -> str:
                 if isinstance(cc, str):
                     cc = json.loads(cc)
                 if cc:
-                    parts.append(f"    Class costs: {json.dumps(cc, ensure_ascii=False)}")
+                    parts.append(
+                        f"    Class costs: {json.dumps(cc, ensure_ascii=False)}"
+                    )
             if m.get("no_class_cost"):
                 parts.append(f"    No class cost: {m['no_class_cost']}")
             # Show extra settings from form_fields_meta (human-readable labels)
@@ -457,9 +606,20 @@ def _settings_shipping(project_id: str, query: str) -> str:
                     extra_settings = json.loads(extra_settings)
                 if isinstance(form_fields, str):
                     form_fields = json.loads(form_fields) if form_fields else {}
-                _shown_keys = {"cost", "min_amount", "requires", "tax_status", "type", "title"}
+                _shown_keys = {
+                    "cost",
+                    "min_amount",
+                    "requires",
+                    "tax_status",
+                    "type",
+                    "title",
+                }
                 for sk, sv in extra_settings.items():
-                    if sk in _shown_keys or sk.startswith("_") or sv in (None, "", [], {}):
+                    if (
+                        sk in _shown_keys
+                        or sk.startswith("_")
+                        or sv in (None, "", [], {})
+                    ):
                         continue
                     label = form_fields.get(sk, {}).get("title") or sk
                     parts.append(f"    {label}: {_format_setting_value(sv)}")
@@ -505,14 +665,18 @@ def _settings_tax(project_id: str, query: str) -> str:
     if tax_rates:
         parts.append(f"\nTax Rates ({len(tax_rates)}):")
         for rate in tax_rates[:20]:
-            parts.append(f"  {rate.get('name', '?')}: {rate.get('rate', '?')}% (class: {rate.get('class', 'standard')}, country: {rate.get('country', '*')})")
+            parts.append(
+                f"  {rate.get('name', '?')}: {rate.get('rate', '?')}% (class: {rate.get('class', 'standard')}, country: {rate.get('country', '*')})"
+            )
 
     return "\n".join(parts)
 
 
 def _settings_checkout(project_id: str, query: str) -> str:
     """Query general WooCommerce settings."""
-    url = f"{config.SUPABASE_URL}/rest/v1/wc_general_settings?project_id=eq.{project_id}"
+    url = (
+        f"{config.SUPABASE_URL}/rest/v1/wc_general_settings?project_id=eq.{project_id}"
+    )
     try:
         r = _http.get(url, headers=_HEADERS)
         r.raise_for_status()
@@ -525,7 +689,9 @@ def _settings_checkout(project_id: str, query: str) -> str:
 
     gen = rows[0]
     parts = ["=== General / Checkout Settings ==="]
-    parts.append(f"Currency: {gen.get('currency')} (position: {gen.get('currency_position')})")
+    parts.append(
+        f"Currency: {gen.get('currency')} (position: {gen.get('currency_position')})"
+    )
     parts.append(f"Store country: {gen.get('store_country')}")
     parts.append(f"Store city: {gen.get('store_city')}")
     parts.append(f"Coupons enabled: {gen.get('enable_coupons')}")
@@ -538,7 +704,15 @@ def _settings_checkout(project_id: str, query: str) -> str:
         if isinstance(settings_json, str):
             settings_json = json.loads(settings_json)
         # Show extra fields not in the summary
-        extra_keys = set(settings_json.keys()) - {"currency", "currency_position", "store_country", "store_city", "enable_coupons", "enable_guest_checkout", "manage_stock"}
+        extra_keys = set(settings_json.keys()) - {
+            "currency",
+            "currency_position",
+            "store_country",
+            "store_city",
+            "enable_coupons",
+            "enable_guest_checkout",
+            "manage_stock",
+        }
         if extra_keys:
             parts.append("\nAdditional settings:")
             for key in sorted(extra_keys):
@@ -585,7 +759,9 @@ def _settings_theme(project_id: str, query: str) -> str:
     if query_lower:
         for key, val in all_opts.items():
             key_lower = key.lower()
-            if query_lower in key_lower or any(q in key_lower for q in query_lower.split()):
+            if query_lower in key_lower or any(
+                q in key_lower for q in query_lower.split()
+            ):
                 filtered[key] = val
     else:
         filtered = all_opts
@@ -606,7 +782,9 @@ def _settings_theme(project_id: str, query: str) -> str:
         parts.append(f"\nNo match for '{query}'. Available sections:")
         for p, count in sorted(prefixes.items(), key=lambda x: -x[1])[:20]:
             parts.append(f"  {p}: {count} options")
-        parts.append("\nTry: search_settings('theme', 'header') or search_settings('theme', 'shop')")
+        parts.append(
+            "\nTry: search_settings('theme', 'header') or search_settings('theme', 'shop')"
+        )
         return "\n".join(parts)
 
     # Group by prefix and show (cap at 50)
@@ -621,7 +799,9 @@ def _settings_theme(project_id: str, query: str) -> str:
             parts.append(f"  {key}: {_format_setting_value(val)}")
 
     if len(filtered) > 50:
-        parts.append(f"\n... showing 50/{len(filtered)} matches. Use more specific query.")
+        parts.append(
+            f"\n... showing 50/{len(filtered)} matches. Use more specific query."
+        )
 
     return "\n".join(parts)
 
@@ -637,7 +817,9 @@ def _settings_plugin(project_id: str, query: str) -> str:
     feature_terms = query_parts[1:] if len(query_parts) > 1 else []
 
     if plugin_term:
-        params += f"&or=(plugin_slug.ilike.*{plugin_term}*,plugin_name.ilike.*{plugin_term}*)"
+        params += (
+            f"&or=(plugin_slug.ilike.*{plugin_term}*,plugin_name.ilike.*{plugin_term}*)"
+        )
 
     try:
         r = _http.get(f"{url}?{params}", headers=_HEADERS)
@@ -651,7 +833,10 @@ def _settings_plugin(project_id: str, query: str) -> str:
             return f"No settings for plugin '{plugin_term}'. Use search_settings('plugin', '') to list all."
         # List all
         try:
-            r = _http.get(f"{url}?project_id=eq.{project_id}&select=plugin_slug,plugin_name", headers=_HEADERS)
+            r = _http.get(
+                f"{url}?project_id=eq.{project_id}&select=plugin_slug,plugin_name",
+                headers=_HEADERS,
+            )
             r.raise_for_status()
             all_rows = r.json()
         except Exception:
@@ -746,6 +931,7 @@ _SETTINGS_HANDLERS = {
 
 # -- Tool: get_shop_config -------------------------------------------
 
+
 def get_shop_config() -> str:
     """Get structured shop configuration: plugins, shipping, payments, tax, versions.
 
@@ -824,7 +1010,9 @@ def _format_config(data: dict) -> str:
             has_free = any(m.get("method_id") == "free_shipping" for m in zone_methods)
             if "θεσσαλονίκη" in name_lower:
                 classified["THESSALONIKI"].append((zone_id, zone_name, zone_methods))
-            elif "αθήνα" in name_lower or "πειραι" in name_lower or "αττικ" in name_lower:
+            elif (
+                "αθήνα" in name_lower or "πειραι" in name_lower or "αττικ" in name_lower
+            ):
                 classified["ATHENS"].append((zone_id, zone_name, zone_methods))
             elif has_free:
                 classified["MAINLAND"].append((zone_id, zone_name, zone_methods))
@@ -840,7 +1028,11 @@ def _format_config(data: dict) -> str:
         for m in methods:
             class_costs = m.get("class_costs")
             if class_costs and isinstance(class_costs, (dict, str)):
-                costs = json.loads(class_costs) if isinstance(class_costs, str) else class_costs
+                costs = (
+                    json.loads(class_costs)
+                    if isinstance(class_costs, str)
+                    else class_costs
+                )
                 for slug, cost_formula in costs.items():
                     all_class_slugs.add(slug)
                     if slug not in sample_class_costs:
@@ -887,7 +1079,9 @@ def _format_config(data: dict) -> str:
                         extras.append(f"tax={tax_status}")
                     extra_str = f" {' '.join(extras)}" if extras else ""
                     method_strs.append(f"{method_id}:{instance_id}{extra_str}")
-                parts.append(f"  [zone {zone_id}: {zone_name}]: {', '.join(method_strs)}")
+                parts.append(
+                    f"  [zone {zone_id}: {zone_name}]: {', '.join(method_strs)}"
+                )
 
         # Free shipping compact summary — grouped by threshold
         free_methods = [m for m in methods if m.get("method_id") == "free_shipping"]
@@ -909,7 +1103,9 @@ def _format_config(data: dict) -> str:
     tax = data.get("tax_settings") or {}
     if tax:
         parts.append(f"\n=== Tax ===")
-        parts.append(f"Enabled: {tax.get('tax_enabled')} | Prices include tax: {tax.get('prices_include_tax')}")
+        parts.append(
+            f"Enabled: {tax.get('tax_enabled')} | Prices include tax: {tax.get('prices_include_tax')}"
+        )
         rates = tax.get("tax_rates")
         if isinstance(rates, str):
             rates = json.loads(rates)
@@ -921,8 +1117,12 @@ def _format_config(data: dict) -> str:
     general = data.get("wc_general_settings") or {}
     if general:
         parts.append(f"\n=== General Settings ===")
-        parts.append(f"Currency: {general.get('currency', '?')} (position: {general.get('currency_position', '?')})")
-        parts.append(f"Store location: {general.get('store_country', '?')}, {general.get('store_city', '?')}")
+        parts.append(
+            f"Currency: {general.get('currency', '?')} (position: {general.get('currency_position', '?')})"
+        )
+        parts.append(
+            f"Store location: {general.get('store_country', '?')}, {general.get('store_city', '?')}"
+        )
         parts.append(f"Coupons enabled: {general.get('enable_coupons')}")
         parts.append(f"Guest checkout: {general.get('enable_guest_checkout')}")
         parts.append(f"Stock management: {general.get('manage_stock')}")
@@ -937,27 +1137,42 @@ def _format_config(data: dict) -> str:
     # Theme settings — with feature detection for key WooCommerce features
     theme_settings = data.get("theme_settings") or []
     if theme_settings:
-        ts_list = theme_settings if isinstance(theme_settings, list) else [theme_settings]
+        ts_list = (
+            theme_settings if isinstance(theme_settings, list) else [theme_settings]
+        )
         for ts_item in ts_list:
             if not isinstance(ts_item, dict):
                 continue
             settings = ts_item.get("settings", {})
             if isinstance(settings, str):
                 settings = json.loads(settings)
-            framework = settings.get("framework", "customizer") if isinstance(settings, dict) else "customizer"
+            framework = (
+                settings.get("framework", "customizer")
+                if isinstance(settings, dict)
+                else "customizer"
+            )
             slug = ts_item.get("theme_slug", "?")
             parts.append(f"\n=== Theme Settings ({slug}) ===")
             parts.append(f"Framework: {framework}")
             if isinstance(settings, dict):
-                all_opts = {**settings.get("framework_options", {}), **settings.get("theme_mods", {})}
+                all_opts = {
+                    **settings.get("framework_options", {}),
+                    **settings.get("theme_mods", {}),
+                }
                 opt_count = len(all_opts)
                 parts.append(f"Total options: {opt_count}")
 
                 # Detect key WooCommerce features from theme options
                 # Woodmart uses varied naming: some _enabled, some plain bool, some 0/1
                 _THEME_FEATURES = [
-                    ("shipping_progress_bar_enabled", "Free Shipping Progress Bar (cart/checkout)"),
-                    ("shipping_progress_bar_amount", "Free Shipping Progress Bar (cart/checkout)"),
+                    (
+                        "shipping_progress_bar_enabled",
+                        "Free Shipping Progress Bar (cart/checkout)",
+                    ),
+                    (
+                        "shipping_progress_bar_amount",
+                        "Free Shipping Progress Bar (cart/checkout)",
+                    ),
                     ("buy_now_enabled", "Buy Now Button"),
                     ("my_account_wishlist", "Wishlist"),
                     ("compare", "Product Compare"),
@@ -978,23 +1193,33 @@ def _format_config(data: dict) -> str:
                 for key, label in _THEME_FEATURES:
                     if key in all_opts and label not in seen_labels:
                         val = all_opts[key]
-                        status = "ON" if val and str(val) not in ("0", "false", "", "False") else "OFF"
+                        status = (
+                            "ON"
+                            if val and str(val) not in ("0", "false", "", "False")
+                            else "OFF"
+                        )
                         detected.append(f"{label}: {status}")
                         seen_labels.add(label)
 
                 if detected:
-                    parts.append("Built-in theme features (use search_settings('theme', feature) for details):")
+                    parts.append(
+                        "Built-in theme features (use search_settings('theme', feature) for details):"
+                    )
                     for feat in detected:
                         parts.append(f"  - {feat}")
-                parts.append("NOTE: Theme may have MORE features not listed above (e.g. shipping progress bar, buy now, delivery estimates).")
-                parts.append("For UI feature requests, ALWAYS check: search('woodmart FEATURE_NAME', category='plugin_docs')")
+                parts.append(
+                    "NOTE: Theme may have MORE features not listed above (e.g. shipping progress bar, buy now, delivery estimates)."
+                )
+                parts.append(
+                    "For UI feature requests, ALWAYS check: search('woodmart FEATURE_NAME', category='plugin_docs')"
+                )
 
     return "\n".join(parts)
 
 
 # -- Formatting -------------------------------------------------------
 
-_BODY_HIGH = 3000    # relevance >= 0.5 → full body
+_BODY_HIGH = 3000  # relevance >= 0.5 → full body
 _BODY_MEDIUM = 1500  # relevance 0.2-0.5 → truncated body
 _NOISE_THRESHOLD = 0.15  # relevance < 0.15 → drop entirely
 
@@ -1063,6 +1288,7 @@ def _build_quick_ref(results: list[dict]) -> str:
     Contains: result count, function definitions, hooks, categories.
     """
     from collections import Counter
+
     func_defs: set[str] = set()
     hook_counts: Counter[str] = Counter()
     categories: Counter[str] = Counter()
@@ -1071,7 +1297,7 @@ def _build_quick_ref(results: list[dict]) -> str:
     for doc in results:
         body = doc.get("body") or doc.get("text") or ""
         func_defs.update(_FUNC_DEF_RE.findall(body))
-        for h in (doc.get("hooks") or []):
+        for h in doc.get("hooks") or []:
             hook_counts[h] += 1
         cat = doc.get("category") or doc.get("doc_type") or ""
         if cat:
@@ -1102,10 +1328,11 @@ def _format_results(results: list[dict]) -> str:
 
     # Filter noise
     filtered = [
-        d for d in results
-        if d.get("_auto_resolved") or
-        d.get("relevance_score") is None or
-        d.get("relevance_score", 0) >= _NOISE_THRESHOLD
+        d
+        for d in results
+        if d.get("_auto_resolved")
+        or d.get("relevance_score") is None
+        or d.get("relevance_score", 0) >= _NOISE_THRESHOLD
     ]
     if not filtered:
         return "No results above noise threshold."
@@ -1142,7 +1369,9 @@ def _format_results(results: list[dict]) -> str:
 
     # --- Tier 2: full code for top results ---
     # Determine how many to show in full based on body size
-    top_body_len = len(filtered[0].get("body") or filtered[0].get("text") or "") if filtered else 0
+    top_body_len = (
+        len(filtered[0].get("body") or filtered[0].get("text") or "") if filtered else 0
+    )
     full_count = 2 if top_body_len > 3000 else 3
 
     parts.append(f"FULL CODE (top {full_count} results):")
@@ -1165,7 +1394,9 @@ def _format_results(results: list[dict]) -> str:
         all_called.update(calls_in_doc)
         all_defined.update(defs_in_doc)
         external_calls = calls_in_doc - defs_in_doc
-        calls_str = f"\nCalls: {', '.join(sorted(external_calls))}" if external_calls else ""
+        calls_str = (
+            f"\nCalls: {', '.join(sorted(external_calls))}" if external_calls else ""
+        )
 
         # Smart truncation based on relevance
         max_chars = _BODY_HIGH if (score is None or score >= 0.5) else _BODY_MEDIUM
@@ -1231,7 +1462,21 @@ TOOL_SCHEMAS = [
                     },
                     "category": {
                         "type": "string",
-                        "enum": ["shipping", "payments", "checkout", "cart", "tax", "products", "orders", "emails", "theme", "security", "performance", "general", "plugin_docs"],
+                        "enum": [
+                            "shipping",
+                            "payments",
+                            "checkout",
+                            "cart",
+                            "tax",
+                            "products",
+                            "orders",
+                            "emails",
+                            "theme",
+                            "security",
+                            "performance",
+                            "general",
+                            "plugin_docs",
+                        ],
                         "description": "Optional filter. Omit for broader results. Use when you know the exact domain.",
                     },
                     "scope": {
@@ -1257,7 +1502,10 @@ TOOL_SCHEMAS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "hook_name": {"type": "string", "description": "Exact hook/filter name, e.g. 'woocommerce_package_rates' or 'woocommerce_available_payment_gateways'"},
+                    "hook_name": {
+                        "type": "string",
+                        "description": "Exact hook/filter name, e.g. 'woocommerce_package_rates' or 'woocommerce_available_payment_gateways'",
+                    },
                 },
                 "required": ["hook_name"],
             },
@@ -1290,7 +1538,14 @@ TOOL_SCHEMAS = [
                 "properties": {
                     "domain": {
                         "type": "string",
-                        "enum": ["payments", "shipping", "tax", "checkout", "theme", "plugin"],
+                        "enum": [
+                            "payments",
+                            "shipping",
+                            "tax",
+                            "checkout",
+                            "theme",
+                            "plugin",
+                        ],
                         "description": (
                             "payments = gateways (COD, Stripe, bank). "
                             "shipping = zones, methods, costs, free shipping thresholds. "

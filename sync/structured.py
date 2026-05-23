@@ -83,8 +83,11 @@ async def sync_structured_data(
             "theme_name": payload.data.theme_info.name,
             "theme_version": payload.data.theme_info.version,
             "is_child_theme": payload.data.theme_info.is_child,
-            "parent_theme": (payload.data.theme_info.parent.name
-                             if payload.data.theme_info.parent else None),
+            "parent_theme": (
+                payload.data.theme_info.parent.name
+                if payload.data.theme_info.parent
+                else None
+            ),
             "active_plugins_count": len(payload.data.active_plugins),
             "last_sync": payload.timestamp,
         }
@@ -105,7 +108,9 @@ async def sync_structured_data(
                 "description": gw.description,
                 "supports": json.dumps(gw.supports),
                 "settings": json.dumps(gw.settings),
-                "form_fields_meta": json.dumps(gw.form_fields_meta) if gw.form_fields_meta else None,
+                "form_fields_meta": json.dumps(gw.form_fields_meta)
+                if gw.form_fields_meta
+                else None,
             }
             for gw in wc.payment_gateways
         ]
@@ -136,23 +141,29 @@ async def sync_structured_data(
         method_rows = []
         for z in wc.shipping_zones:
             for m in z.methods:
-                method_rows.append({
-                    "project_id": pid,
-                    "zone_id": z.zone_id,
-                    "zone_name": z.zone_name,
-                    "instance_id": m.instance_id,
-                    "method_id": m.method_id,
-                    "method_title": m.method_title,
-                    "enabled": m.enabled == "yes",
-                    "cost": m.cost,
-                    "tax_status": m.tax_status,
-                    "requires": m.requires,
-                    "min_amount": m.min_amount,
-                    "class_costs": json.dumps(m.class_costs) if m.class_costs else None,
-                    "no_class_cost": m.no_class_cost,
-                    "settings": json.dumps(m.settings) if m.settings else None,
-                    "form_fields_meta": json.dumps(m.form_fields_meta) if m.form_fields_meta else None,
-                })
+                method_rows.append(
+                    {
+                        "project_id": pid,
+                        "zone_id": z.zone_id,
+                        "zone_name": z.zone_name,
+                        "instance_id": m.instance_id,
+                        "method_id": m.method_id,
+                        "method_title": m.method_title,
+                        "enabled": m.enabled == "yes",
+                        "cost": m.cost,
+                        "tax_status": m.tax_status,
+                        "requires": m.requires,
+                        "min_amount": m.min_amount,
+                        "class_costs": json.dumps(m.class_costs)
+                        if m.class_costs
+                        else None,
+                        "no_class_cost": m.no_class_cost,
+                        "settings": json.dumps(m.settings) if m.settings else None,
+                        "form_fields_meta": json.dumps(m.form_fields_meta)
+                        if m.form_fields_meta
+                        else None,
+                    }
+                )
         await _upsert(client, "shipping_methods", method_rows)
         total += len(method_rows)
     except Exception as e:
@@ -238,16 +249,37 @@ async def sync_structured_data(
                 "project_id": pid,
                 "theme_slug": payload.data.theme_info.name.lower().replace(" ", "-"),
                 "source": ts.source or "customizer",
-                "settings": json.dumps({
-                    "theme_mods": ts.theme_mods,
-                    "framework": ts.framework,
-                    "framework_options": ts.framework_options,
-                }),
+                "settings": json.dumps(
+                    {
+                        "theme_mods": ts.theme_mods,
+                        "framework": ts.framework,
+                        "framework_options": ts.framework_options,
+                    }
+                ),
             }
             await _upsert(client, "theme_settings", [ts_row])
             total += 1
     except Exception as e:
         errors.append(f"theme_settings: {e}")
+
+    # -- 10. shipping_classes --------------------------------------------
+    try:
+        sc_rows = [
+            {
+                "project_id": pid,
+                "term_id": sc.term_id,
+                "name": sc.name,
+                "slug": sc.slug,
+                "description": sc.description,
+                "count": sc.count,
+            }
+            for sc in wc.shipping_classes
+        ]
+        if sc_rows:
+            await _upsert(client, "shipping_classes", sc_rows)
+            total += len(sc_rows)
+    except Exception as e:
+        errors.append(f"shipping_classes: {e}")
 
     if errors:
         logger.error("Structured sync errors for %s: %s", pid, "; ".join(errors))
@@ -286,7 +318,9 @@ async def generate_project_summary(
     # Payment gateways (enabled only)
     gateways = [g for g in (data.get("payment_gateways") or []) if g.get("enabled")]
     if gateways:
-        gw_str = ", ".join(f"{g.get('title')} ({g.get('gateway_id')})" for g in gateways)
+        gw_str = ", ".join(
+            f"{g.get('title')} ({g.get('gateway_id')})" for g in gateways
+        )
         parts.append(f"Payment: {gw_str}")
 
     # Shipping methods (enabled only) — compact
@@ -313,8 +347,12 @@ async def generate_project_summary(
     # Plugin settings available (dynamic list)
     ps_list = data.get("plugin_settings") or []
     if ps_list:
-        ps_names = [ps.get("plugin_name") or ps.get("plugin_slug", "?") for ps in ps_list]
-        parts.append(f"Plugin Settings Available: {', '.join(ps_names)} (use search_plugin_settings for details)")
+        ps_names = [
+            ps.get("plugin_name") or ps.get("plugin_slug", "?") for ps in ps_list
+        ]
+        parts.append(
+            f"Plugin Settings Available: {', '.join(ps_names)} (use search_plugin_settings for details)"
+        )
 
     # Theme settings
     ts_data = data.get("theme_settings")
@@ -325,7 +363,11 @@ async def generate_project_summary(
                 settings = ts_item.get("settings", {})
                 if isinstance(settings, str):
                     settings = json.loads(settings)
-                framework = settings.get("framework", "customizer") if isinstance(settings, dict) else "customizer"
+                framework = (
+                    settings.get("framework", "customizer")
+                    if isinstance(settings, dict)
+                    else "customizer"
+                )
                 parts.append(f"Theme Settings: {framework} framework detected")
                 break
 

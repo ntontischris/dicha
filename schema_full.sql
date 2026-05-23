@@ -29,6 +29,7 @@ DROP FUNCTION IF EXISTS get_project_context CASCADE;
 DROP FUNCTION IF EXISTS match_documents CASCADE;
 
 DROP TABLE IF EXISTS documents CASCADE;
+DROP TABLE IF EXISTS shipping_classes CASCADE;
 DROP TABLE IF EXISTS theme_settings CASCADE;
 DROP TABLE IF EXISTS plugin_settings CASCADE;
 DROP TABLE IF EXISTS active_plugins CASCADE;
@@ -159,6 +160,20 @@ CREATE TABLE active_plugins (
   plugin_file         text DEFAULT '',
   synced_at           timestamptz DEFAULT now(),
   UNIQUE (project_id, plugin_file)
+);
+
+
+-- ── shipping_classes ─────────────────────────────────────────────────
+CREATE TABLE shipping_classes (
+  id                  bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  project_id          text NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
+  term_id             integer,
+  name                text DEFAULT '',
+  slug                text DEFAULT '',
+  description         text DEFAULT '',
+  count               integer DEFAULT 0,
+  synced_at           timestamptz DEFAULT now(),
+  UNIQUE (project_id, slug)
 );
 
 
@@ -523,6 +538,7 @@ BEGIN
   DELETE FROM documents        WHERE project_id = p_project_id AND type = 'plugin_settings_doc';
 
   -- Structured tables
+  DELETE FROM shipping_classes WHERE project_id = p_project_id;
   DELETE FROM theme_settings   WHERE project_id = p_project_id;
   DELETE FROM plugin_settings  WHERE project_id = p_project_id;
   DELETE FROM active_plugins   WHERE project_id = p_project_id;

@@ -119,6 +119,7 @@ Give a solid 80% answer → let developer refine. For bugs: diagnosis first → 
 ❌ TODO WITH AVAILABLE DATA — If search returned the ID, USE IT
 ❌ LABEL MATCHING — NEVER match by title/label. ALWAYS use instance_id
 ❌ FABRICATING — NEVER invent hooks, functions, IDs, meta fields
+❌ FABRICATED SHIPPING CLASSES — NEVER invent shipping class slugs. Get the real slugs from search_settings("shipping") (the class_costs keys) before writing code that references a shipping class.
 ❌ NEW CODE FOR BUGS — MODIFY existing, don't rewrite
 ❌ DUPLICATE HELPERS — If results show existing helpers, REUSE them
 ❌ VECTOR SEARCH FOR CONFIG — If the answer is a specific setting value
@@ -223,6 +224,7 @@ Translate Greek → English for queries. Config already in context.
 - Free shipping: filter `woocommerce_shipping_free_shipping_is_available` with instance_id.
 - Rate changes: filter `woocommerce_package_rates` with rate ID (e.g. `flat_rate:226`).
 - If class_costs exist, use them.
+- Before writing code that references shipping classes, get the REAL class slugs from search_settings("shipping") (they appear as class_costs keys, e.g. `plakakia`, `plakakia-megalon-diastaseon`, `mpaniera`). NEVER guess or invent class slugs.
 - If Weight Based Shipping plugin is installed, check search_settings("plugin", "weight-based-shipping") for the full weight rules config BEFORE writing custom shipping logic.
 
 ## CODE STANDARDS
