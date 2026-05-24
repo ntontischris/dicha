@@ -5,9 +5,9 @@ assertions (must-contain / contain-any / must-NOT-contain); some run multiple
 times to catch inconsistency. Prints a PASS/FAIL table + saves verify_report.txt.
 
 Usage:
-    1) start a server with current code:  python -m uvicorn webhook:app --port 8004
-    2) AGENT_URL=http://localhost:8004 python verify_agent.py
-Env overrides: AGENT_URL (default http://localhost:8004), VERIFY_PID (default dicha-demo).
+    1) start a server with current code:  python -m uvicorn webhook:app --port 8006
+    2) AGENT_URL=http://localhost:8006 python verify_agent.py
+Env overrides: AGENT_URL (default http://localhost:8006), VERIFY_PID (default dicha-demo).
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ for line in (HERE / ".env").read_text(encoding="utf-8").splitlines():
 SECRET = env.get("WEBHOOK_SECRET", "")
 SUPA = env["SUPABASE_URL"]
 KEY = env["SUPABASE_KEY"]
-BASE = os.getenv("AGENT_URL", "http://localhost:8004")
+BASE = os.getenv("AGENT_URL", "http://localhost:8006")
 PID = os.getenv("VERIFY_PID", "dicha-demo")
 SB = {"apikey": KEY, "Authorization": "Bearer " + KEY}
 
@@ -52,7 +52,7 @@ classes = [
 
 # --- the battery --------------------------------------------------------------
 # all: every needle present | any: each inner group needs >=1 | none: forbidden
-# review=True -> diagnostic only (failure is informational, not a hard regression)
+# review=True -> diagnostic / open-ended (failure is informational, logs full reply)
 TESTS = [
     dict(
         id="cod-max",
@@ -148,6 +148,61 @@ TESTS = [
         q="Οι τιμές των προϊόντων εμφανίζονται με ΦΠΑ ή χωρίς ΦΠΑ;",
         note="DIAGNOSTIC: raw-value interpretation (Layer-2, not yet hardened)",
     ),
+    # ── COMPLEX / realistic multi-factor scenarios (open-ended → review) ──────
+    dict(
+        id="cx-athens-overcharge",
+        repeat=1,
+        review=True,
+        q=(
+            "Σε μια παραγγελία χρεώθηκαν σωστά 45€ μεταφορικά για τα πλακάκια, αλλά "
+            "χρεώθηκαν και 54,99€ για τα υπόλοιπα προϊόντα ενώ ο πελάτης είναι στην Αθήνα "
+            "— θα έπρεπε να είναι 0€. Τι φταίει και πώς το διορθώνω;"
+        ),
+        any=[["dc_", "snippet", "plakakia", "ζών", "zone", "function"]],
+        none=["epipla", "mpanieres"],
+        note="COMPLEX: Athens over-charge diagnosis (real client case)",
+    ),
+    dict(
+        id="cx-cod-invoice-600",
+        repeat=1,
+        review=True,
+        q=(
+            "Πελάτης ζήτησε τιμολόγιο και αντικαταβολή για παραγγελία 600€ και δεν του "
+            "εμφανίζεται η αντικαταβολή. Γιατί συμβαίνει αυτό;"
+        ),
+        must_all=["500"],
+        any=[["τιμολ", "invoice", "snippet", "dc_", "αντικαταβ"]],
+        none=["ελάχιστο", "τουλάχιστον"],
+        note="COMPLEX: COD disabled >500 (+ invoice rule)",
+    ),
+    dict(
+        id="cx-multizone-freeship",
+        repeat=1,
+        review=True,
+        q=(
+            "Θέλω δωρεάν μεταφορικά: 500€ για όλη τη χερσαία Ελλάδα και 200€ για "
+            "Θεσσαλονίκη, με εξαίρεση πλακάκια, έπιπλα και μπανιέρες. Τι πρέπει να αλλάξω "
+            "σε ρυθμίσεις και κώδικα;"
+        ),
+        any=[
+            ["plakakia"],
+            ["megalo-epiplo", "epiplo-mpaniou", "mesaio-epiplo"],
+            ["mpaniera"],
+        ],
+        none=["epipla", "mpanieres"],
+        note="COMPLEX: multi-zone free shipping + real exclusion slugs",
+    ),
+    dict(
+        id="cx-conflict-crossref",
+        repeat=1,
+        review=True,
+        q=(
+            "Ποιο είναι το πραγματικό όριο για δωρεάν μεταφορικά στην Αθήνα και από πού "
+            "καθορίζεται — από ρύθμιση ή από κώδικα; Υπάρχει σύγκρουση;"
+        ),
+        any=[["snippet", "dc_", "κώδικ", "ρύθμ", "zone", "ζών", "flat_rate"]],
+        note="COMPLEX: cross-reference settings vs custom code",
+    ),
 ]
 
 
@@ -198,7 +253,8 @@ for t in TESTS:
             log(
                 f"  run{run + 1}: {tag} {('- ' + '; '.join(fails)) if fails else ''} | tools={d.get('tools_used')}"
             )
-            log("     reply: " + reply[:240].replace("\n", " "))
+            cap = 1600 if t.get("review") else 280
+            log("     reply: " + reply[:cap].replace("\n", " "))
         except Exception as e:
             verdicts.append(False)
             log(f"  run{run + 1}: ERROR {e!r}")
