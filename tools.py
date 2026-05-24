@@ -13,6 +13,7 @@ Search pipeline:
   3. Progressive disclosure: QUICK_REF + summary + top 2-3 full code
 """
 
+import inspect
 import json
 import re
 import time
@@ -1675,4 +1676,8 @@ def call_tool(name: str, arguments: dict) -> str:
     fn = _TOOL_MAP.get(name)
     if fn is None:
         return f"ERROR: Unknown tool '{name}'"
-    return fn(**arguments)
+    # LLMs occasionally emit an extra/misnamed kwarg (e.g. plugin=... for
+    # search_settings). Pass only params the tool accepts so one hallucinated
+    # argument can't raise TypeError and 500 the whole request.
+    valid = set(inspect.signature(fn).parameters)
+    return fn(**{k: v for k, v in arguments.items() if k in valid})
