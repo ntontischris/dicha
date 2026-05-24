@@ -72,3 +72,15 @@ def test_category_is_exclude_mode_with_trigger():
 
 def test_empty_settings_returns_no_lines():
     assert _interpret_cod_restrictions({"enabled": "yes", "title": "COD"}) == []
+
+
+def test_shipping_class_ids_resolve_to_names_when_map_given():
+    id_maps = {"shipping_class_restriction": {"6040": "kanapedes", "6039": "ntoylapes"}}
+    line = _find(_interpret_cod_restrictions(SMART_COD, id_maps), "shipping class")
+    assert "6040 (kanapedes)" in line
+    assert "6039 (ntoylapes)" in line
+
+
+def test_shipping_class_ids_stay_raw_without_map():
+    line = _find(_interpret_cod_restrictions(SMART_COD), "shipping class")
+    assert "6040" in line and "(kanapedes)" not in line

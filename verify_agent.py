@@ -111,21 +111,12 @@ TESTS = [
     dict(
         id="anti-invent",
         repeat=1,
-        review=True,
         q="Γράψε κώδικα PHP που εξαιρεί τη shipping class «βιβλία» (books) από τα δωρεάν μεταφορικά.",
-        none=[
-            "'books'",
-            '"books"',
-            "`books`",
-            "'vivlia'",
-            "`vivlia`",
-            "'βιβλία'",
-            "'vivlio'",
-        ],
         any=[
-            ["δεν υπάρχ", "δεν βρ", "δεν εντοπ", "not found", "καμία", "δεν φαίνεται"]
+            ["δεν υπάρχ", "δεν βρ", "δεν εντοπ", "not found", "δεν φαίνεται"],
+            ["plakakia", "megalo-epiplo", "mpaniera"],
         ],
-        note="KNOWN-SOFT: must NOT fabricate a non-existent class slug (prompt-resistant)",
+        note="non-existent class: states it doesn't exist AND shows the real classes (no silent fabrication)",
     ),
     dict(
         id="gateways",

@@ -333,8 +333,14 @@ _COD_RESTRICTION_HANDLED = set(_COD_RESTRICTION_FIELDS) | {
 }
 
 
-def _interpret_cod_restrictions(settings: dict) -> list[str]:
-    """Translate Smart COD restriction fields into explicit, unambiguous lines."""
+def _interpret_cod_restrictions(
+    settings: dict, id_maps: dict | None = None
+) -> list[str]:
+    """Translate Smart COD restriction fields into explicit, unambiguous lines.
+
+    id_maps optionally maps a restriction key -> {id: name} so raw term IDs (e.g.
+    shipping classes) are shown with names instead of opaque numbers."""
+    id_maps = id_maps or {}
     modes = settings.get("restriction_settings") or {}
     if isinstance(modes, str):
         try:
@@ -370,13 +376,36 @@ def _interpret_cod_restrictions(settings: dict) -> list[str]:
         if not value or value in ("0", 0):
             continue
         items = value if isinstance(value, list) else [value]
+        name_map = id_maps.get(key) or {}
+        rendered = [
+            f"{i} ({name_map[str(i)]})" if str(i) in name_map else str(i) for i in items
+        ]
         trigger = settings.get(f"{key}_mode")
         trigger_txt = f", triggers when {trigger}" if trigger else ""
-        lines.append(
-            f"{label}: {', '.join(str(i) for i in items)} [{_mode(key)}{trigger_txt}]"
-        )
+        lines.append(f"{label}: {', '.join(rendered)} [{_mode(key)}{trigger_txt}]")
 
     return lines
+
+
+def _shipping_class_id_map(project_id: str) -> dict:
+    """{restriction_key: {term_id(str): slug}} so Smart COD shipping_class_restriction
+    IDs render with names. Empty on error / none."""
+    try:
+        r = _http.get(
+            f"{config.SUPABASE_URL}/rest/v1/shipping_classes"
+            f"?project_id=eq.{project_id}&select=term_id,name,slug",
+            headers=_HEADERS,
+        )
+        if r.status_code != 200:
+            return {}
+        m = {}
+        for c in r.json():
+            tid = c.get("term_id")
+            if tid is not None:
+                m[str(tid)] = c.get("slug") or c.get("name") or ""
+        return {"shipping_class_restriction": m} if m else {}
+    except Exception:
+        return {}
 
 
 def _settings_payments(project_id: str, query: str) -> str:
@@ -447,7 +476,9 @@ def _settings_payments(project_id: str, query: str) -> str:
             # Smart COD: translate restriction fields into explicit text so the
             # model never has to guess min-vs-max (see _interpret_cod_restrictions).
             cod_lines = (
-                _interpret_cod_restrictions(settings)
+                _interpret_cod_restrictions(
+                    settings, _shipping_class_id_map(project_id)
+                )
                 if "restriction_settings" in settings
                 else []
             )
@@ -497,7 +528,9 @@ def _format_shipping_class_list(rows: list[dict]) -> str:
     if not rows:
         return ""
     lines = [
-        "Shipping classes on this shop (use these EXACT slugs in code — never invent):"
+        "Shipping classes on this shop — these are the ONLY ones that exist. Use these "
+        "EXACT slugs in code. If the user names a class NOT in this list, it does NOT "
+        "exist here: say so and show this list — NEVER invent or assume a slug."
     ]
     for r in rows:
         lines.append(
@@ -806,6 +839,44 @@ def _settings_theme(project_id: str, query: str) -> str:
     return "\n".join(parts)
 
 
+def _flatten_one_level(settings: dict) -> dict:
+    """Expose keys nested one level deep. Plugins often wrap all their settings in
+    a single option (e.g. WP Rocket's `wp_rocket_settings`); without this, that
+    nested dict gets json-dumped + truncated and most toggles become invisible."""
+    flat: dict = {}
+    for k, v in settings.items():
+        if isinstance(v, dict):
+            for sk, sv in v.items():
+                flat.setdefault(sk, sv)
+        else:
+            flat.setdefault(k, v)
+    return flat
+
+
+def _plugin_doc_summary(slug: str, name: str) -> str:
+    """Attach a plugin's reference-doc summary so the agent can interpret raw
+    settings instead of guessing. Matched by slug against plugin_docs titles;
+    prefers the concise 'Quick Summary for AI Interpretation' chunk. '' if none."""
+    term = (slug or "").replace("-", " ").strip()
+    if not term:
+        return ""
+    base = f"{config.SUPABASE_URL}/rest/v1/documents"
+    queries = [
+        f"?category=eq.plugin_docs&is_parent=eq.false&title=ilike.*{term}*Quick Summary*&select=text&limit=1",
+        f"?category=eq.plugin_docs&is_parent=eq.false&title=ilike.*{term}*&select=text&limit=1",
+    ]
+    for q in queries:
+        try:
+            r = _http.get(base + q, headers=_HEADERS)
+            if r.status_code == 200 and r.json():
+                txt = (r.json()[0].get("text") or "").strip()
+                if txt:
+                    return f"  --- Reference: how to read {name}'s settings ---\n{txt[:1800]}"
+        except Exception:
+            pass
+    return ""
+
+
 def _settings_plugin(project_id: str, query: str) -> str:
     """Query plugin settings with key filtering. Replaces search_plugin_settings()."""
     url = f"{config.SUPABASE_URL}/rest/v1/plugin_settings"
@@ -857,13 +928,26 @@ def _settings_plugin(project_id: str, query: str) -> str:
         if isinstance(settings, str):
             settings = json.loads(settings)
 
-        # Feature filter: if query has extra terms, filter keys
-        if feature_terms and isinstance(settings, dict):
-            filtered = {}
-            for key, val in settings.items():
-                key_lower = key.lower()
-                if any(ft.lower() in key_lower for ft in feature_terms):
-                    filtered[key] = val
+        # Lift keys nested one level (e.g. WP Rocket's wp_rocket_settings) so each
+        # toggle is individually visible instead of one truncated JSON blob.
+        if isinstance(settings, dict):
+            settings = _flatten_one_level(settings)
+
+        # Feature filter: narrow to keys matching extra query terms — but ignore
+        # terms that are part of the plugin's own name (e.g. "smart cod" -> plugin
+        # "wc-smart-cod": "cod" is identity, not a feature). Otherwise "cod" matches
+        # a noise key like cod_unavailable_message and hides all real settings.
+        eff_terms = [
+            ft
+            for ft in feature_terms
+            if ft.lower() not in slug.lower() and ft.lower() not in name.lower()
+        ]
+        if eff_terms and isinstance(settings, dict):
+            filtered = {
+                key: val
+                for key, val in settings.items()
+                if any(ft.lower() in key.lower() for ft in eff_terms)
+            }
             if filtered:
                 settings = filtered
 
@@ -885,18 +969,24 @@ def _settings_plugin(project_id: str, query: str) -> str:
 
         shown = 0
         for group_name, items in groups.items():
-            if shown >= 30:
-                parts.append(f"... [capped at 30 settings]")
+            if shown >= 120:
+                parts.append("... [capped]")
                 break
             parts.append(f"\n  --- {group_name} ---")
             for key, val in items:
-                if shown >= 30:
+                if shown >= 120:
                     break
                 val_str = _format_setting_value(val)
                 if len(val_str) > 200:
                     val_str = val_str[:200] + "..."
                 parts.append(f"  {key}: {val_str}")
                 shown += 1
+
+        # Attach the plugin's reference manual (augments the real values above so
+        # the model can interpret them; the values are listed first and dominate).
+        doc = _plugin_doc_summary(slug, name)
+        if doc:
+            parts.append(doc)
         parts.append("")
 
     return "\n".join(parts)
