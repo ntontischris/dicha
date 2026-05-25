@@ -603,6 +603,39 @@ async def list_chat_logs(
     return {"logs": logs, "count": len(logs), "project_id": project_id}
 
 
+@app.delete("/api/plugin-manual")
+async def delete_plugin_manual(
+    slug: str = Query(...),
+    x_webhook_secret: str = Header(default=""),
+    authorization: str = Header(default=""),
+):
+    """Delete a plugin's reference manual (all plugin_docs rows for it) by slug.
+
+    Manuals are stored with title = slug in spaced form, so every chunk's title
+    starts with that — match and delete them all (clean removal / replace).
+    """
+    _verify_secret(x_webhook_secret, authorization)
+
+    term = slug.replace("-", " ").strip()
+    if not term:
+        return {"status": "ok", "deleted": 0, "slug": slug}
+
+    http = app.state.http_client
+    headers = {
+        "apikey": config.SUPABASE_KEY,
+        "Authorization": f"Bearer {config.SUPABASE_KEY}",
+        "Prefer": "return=representation",
+    }
+    quoted = term.replace(" ", "%20")
+    url = f"{config.SUPABASE_URL}/rest/v1/documents?category=eq.plugin_docs&title=ilike.{quoted}*"
+    r = await http.delete(url, headers=headers)
+    r.raise_for_status()
+    deleted = len(r.json()) if r.text.strip() else 0
+
+    logger.info("Deleted plugin manual slug=%s (%d rows)", slug, deleted)
+    return {"status": "ok", "deleted": deleted, "slug": slug}
+
+
 @app.delete("/docs/{doc_id}")
 async def delete_single_doc(
     doc_id: str,
