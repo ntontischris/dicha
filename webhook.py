@@ -35,7 +35,11 @@ from pydantic import BaseModel
 import config
 from sync.models import BulkDocPayload, DocPayload, WebhookPayload
 from sync.settings_docs import generate_settings_documents
-from sync.structured import clear_project_data, generate_project_summary, sync_structured_data
+from sync.structured import (
+    clear_project_data,
+    generate_project_summary,
+    sync_structured_data,
+)
 from sync.vectors import sync_docs, sync_vector_data
 
 logging.basicConfig(
@@ -46,6 +50,7 @@ logger = logging.getLogger(__name__)
 
 
 # -- Lifespan (startup/shutdown) --------------------------------------
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -130,8 +135,7 @@ def _cleanup_sessions() -> None:
     """Remove expired sessions."""
     now = time.monotonic()
     expired = [
-        sid for sid, s in _sessions.items()
-        if now - s.last_active > _SESSION_TTL
+        sid for sid, s in _sessions.items() if now - s.last_active > _SESSION_TTL
     ]
     for sid in expired:
         del _sessions[sid]
@@ -164,7 +168,9 @@ async def _fetch_project_summary(project_id: str) -> str:
     return ""
 
 
-async def _get_or_create_session(session_id: str, project_id: str) -> tuple[_Session, str]:
+async def _get_or_create_session(
+    session_id: str, project_id: str
+) -> tuple[_Session, str]:
     """Get existing session or create new one. Returns (session, session_id)."""
     _cleanup_sessions()
 
@@ -173,11 +179,17 @@ async def _get_or_create_session(session_id: str, project_id: str) -> tuple[_Ses
         if session.project_id == project_id:
             session.last_active = time.monotonic()
             return session, session_id
-        logger.warning("Session %s project mismatch (%s != %s), creating new",
-                        session_id, session.project_id, project_id)
+        logger.warning(
+            "Session %s project mismatch (%s != %s), creating new",
+            session_id,
+            session.project_id,
+            project_id,
+        )
 
     # Create new session
-    new_id = session_id if session_id and session_id not in _sessions else str(uuid.uuid4())
+    new_id = (
+        session_id if session_id and session_id not in _sessions else str(uuid.uuid4())
+    )
 
     prompt = _load_system_prompt()
 
@@ -196,6 +208,7 @@ async def _get_or_create_session(session_id: str, project_id: str) -> tuple[_Ses
 
 
 # -- Auth dependency ---------------------------------------------------
+
 
 def _extract_secret(
     x_webhook_secret: str = Header(default=""),
@@ -231,6 +244,7 @@ def _verify_secret(
 
 # -- Routes ------------------------------------------------------------
 
+
 @app.post("/webhook")
 async def webhook_sync(
     payload: WebhookPayload,
@@ -248,7 +262,8 @@ async def webhook_sync(
 
     logger.info(
         "Webhook received for project=%s site=%s",
-        payload.project_id, payload.site_url,
+        payload.project_id,
+        payload.site_url,
     )
 
     http = app.state.http_client
@@ -269,14 +284,18 @@ async def webhook_sync(
 
     # Settings-as-Documents: render settings → contextual retrieval → embed → upsert
     settings_doc_count = await generate_settings_documents(http, openai, payload)
-    logger.info("Settings docs: %d documents for %s", settings_doc_count, payload.project_id)
+    logger.info(
+        "Settings docs: %d documents for %s", settings_doc_count, payload.project_id
+    )
 
     # Generate project summary after sync
     await generate_project_summary(http, payload.project_id)
 
     logger.info(
         "Sync complete for %s: %d pg rows, %d vector docs",
-        payload.project_id, pg_count, vec_count,
+        payload.project_id,
+        pg_count,
+        vec_count,
     )
 
     return {
@@ -367,6 +386,52 @@ async def delete_docs(
     return {"status": "ok", "project_id": project_id, "type_filter": doc_type}
 
 
+# Markers that indicate the agent could not answer from shop data — used to flag
+# log rows so the owner can review "what it couldn't answer" and add a manual.
+_NO_INFO_MARKERS = (
+    "δεν υπάρχ",
+    "δεν βρ",
+    "δεν εντοπ",
+    "δεν φαίνεται",
+    "δεν μπόρ",
+    "not found",
+    "no information",
+    "δεν διαθέτ",
+)
+
+
+async def _log_chat(http, project_id, session_id, question, answer, tools_used):
+    """Persist a Q&A to chat_logs for audit/review. Never raises — logging must
+    not break the chat response."""
+    low = answer.lower()
+    status = "no_info" if any(m in low for m in _NO_INFO_MARKERS) else "answered"
+    row = {
+        "project_id": project_id,
+        "session_id": session_id,
+        "question": question,
+        "answer": answer,
+        "tools_used": ", ".join(tools_used) if tools_used else "",
+        "status": status,
+    }
+    try:
+        r = await http.post(
+            f"{config.SUPABASE_URL}/rest/v1/chat_logs",
+            headers={
+                "apikey": config.SUPABASE_KEY,
+                "Authorization": f"Bearer {config.SUPABASE_KEY}",
+                "Content-Type": "application/json",
+                "Prefer": "return=minimal",
+            },
+            json=row,
+        )
+        if r.status_code >= 400:
+            logger.warning(
+                "chat_logs insert failed (%s): %s", r.status_code, r.text[:200]
+            )
+    except Exception as e:
+        logger.warning("chat_logs insert error: %s", e)
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(
     req: ChatRequest,
@@ -384,6 +449,7 @@ async def chat(
     session.messages.append({"role": "user", "content": req.message})
 
     from agent import run_agent
+
     usage: dict = {}
 
     # Run sync agent in thread pool with thread-local project_id
@@ -407,6 +473,11 @@ async def chat(
 
     loop = asyncio.get_event_loop()
     reply, tools_used = await loop.run_in_executor(_agent_pool, _run)
+
+    # Audit log (never blocks/breaks the response).
+    await _log_chat(
+        app.state.http_client, req.project_id, sid, req.message, reply, tools_used
+    )
 
     return ChatResponse(
         reply=reply,
@@ -497,6 +568,41 @@ async def list_projects(
     return {"projects": r.json()}
 
 
+@app.get("/api/logs")
+async def list_chat_logs(
+    project_id: str = Query(...),
+    status: str | None = Query(default=None),
+    limit: int = Query(default=100, le=500),
+    x_webhook_secret: str = Header(default=""),
+    authorization: str = Header(default=""),
+):
+    """Conversation history for a project (admin review).
+
+    Optional status filter: 'answered' or 'no_info' (what it couldn't answer).
+    """
+    _verify_secret(x_webhook_secret, authorization)
+
+    http = app.state.http_client
+    url = f"{config.SUPABASE_URL}/rest/v1/chat_logs"
+    params = (
+        f"project_id=eq.{project_id}"
+        "&select=id,project_id,session_id,question,answer,tools_used,status,created_at"
+        f"&order=created_at.desc&limit={limit}"
+    )
+    if status in ("answered", "no_info"):
+        params += f"&status=eq.{status}"
+
+    headers = {
+        "apikey": config.SUPABASE_KEY,
+        "Authorization": f"Bearer {config.SUPABASE_KEY}",
+    }
+    r = await http.get(f"{url}?{params}", headers=headers)
+    r.raise_for_status()
+
+    logs = r.json()
+    return {"logs": logs, "count": len(logs), "project_id": project_id}
+
+
 @app.delete("/docs/{doc_id}")
 async def delete_single_doc(
     doc_id: str,
@@ -540,7 +646,7 @@ async def re_ingest_docs(
     params = (
         f"project_id=eq.{project_id}"
         f"&is_parent=eq.false"  # flat docs have is_parent=false (default)
-        f"&parent_id=is.null"   # and no parent_id (not already a child)
+        f"&parent_id=is.null"  # and no parent_id (not already a child)
         f"&select=id,title,text,type,category,subcategory,scope,is_active,priority"
         f"&order=id.asc&limit=500"
     )
@@ -553,21 +659,27 @@ async def re_ingest_docs(
     existing_docs = r.json()
 
     if not existing_docs:
-        return {"status": "ok", "message": "No flat docs found to re-ingest", "count": 0}
+        return {
+            "status": "ok",
+            "message": "No flat docs found to re-ingest",
+            "count": 0,
+        }
 
     # 2. Convert to DocPayload objects
     doc_payloads: list[DocPayload] = []
     for doc in existing_docs:
-        doc_payloads.append(DocPayload(
-            title=doc["title"],
-            content=doc["text"],
-            type=doc.get("type", "company_doc"),
-            project_id=project_id,
-            category=doc.get("category", "general"),
-            subcategory=doc.get("subcategory", ""),
-            priority=doc.get("priority", 3),
-            tags=[],
-        ))
+        doc_payloads.append(
+            DocPayload(
+                title=doc["title"],
+                content=doc["text"],
+                type=doc.get("type", "company_doc"),
+                project_id=project_id,
+                category=doc.get("category", "general"),
+                subcategory=doc.get("subcategory", ""),
+                priority=doc.get("priority", 3),
+                tags=[],
+            )
+        )
 
     # 3. Delete old flat docs
     del_url = f"{config.SUPABASE_URL}/rest/v1/documents?project_id=eq.{project_id}&parent_id=is.null&is_parent=eq.false"
@@ -580,7 +692,12 @@ async def re_ingest_docs(
     # 4. Re-ingest with parent-child pipeline
     count = await sync_docs(http, openai, doc_payloads)
 
-    logger.info("Re-ingested %d docs → %d rows for project=%s", len(doc_payloads), count, project_id)
+    logger.info(
+        "Re-ingested %d docs → %d rows for project=%s",
+        len(doc_payloads),
+        count,
+        project_id,
+    )
     return {
         "status": "ok",
         "project_id": project_id,
