@@ -499,9 +499,12 @@ async def list_docs(
 
     http = app.state.http_client
 
-    # Build Supabase REST query
+    # Build Supabase REST query.
+    # is_parent=eq.false excludes the internal parent rows the parent-child
+    # pipeline writes alongside each searchable chunk — they share the chunk's
+    # title and would otherwise show up as a phantom duplicate in the UI.
     url = f"{config.SUPABASE_URL}/rest/v1/documents"
-    params = f"project_id=eq.{project_id}&select=id,title,type,category,scope,is_active,synced_at&order=synced_at.desc&limit=500"
+    params = f"project_id=eq.{project_id}&is_parent=eq.false&select=id,title,type,category,scope,is_active,synced_at&order=synced_at.desc&limit=500"
     if doc_type:
         params += f"&type=eq.{doc_type}"
 
