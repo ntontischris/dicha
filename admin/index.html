@@ -427,6 +427,7 @@
                         <div class="flex gap-2 mt-1">
                           <span class="badge badge-blue" x-text="doc.category"></span>
                           <span class="badge badge-purple" x-text="doc.type"></span>
+                          <span x-show="doc.scope === 'global'" class="badge badge-purple">GLOBAL</span>
                         </div>
                       </div>
                       <button @click="viewDoc(doc.id)" class="px-3 py-1 rounded text-xs glass-light text-slate-400 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity">
@@ -591,9 +592,18 @@ function app() {
       this.projectTypeFilter = '';
       this.projectDocsLoading = true;
       try {
-        const r = await fetch('/docs?project_id=' + encodeURIComponent(pid), { headers: headers() });
-        const data = await r.json();
-        this.projectDocs = data.documents || [];
+        // Project docs + global docs (the latter are shared across all projects;
+        // showing them here matches what the agent actually sees during search).
+        const [rProj, rGlobal] = await Promise.all([
+          fetch('/docs?project_id=' + encodeURIComponent(pid), { headers: headers() }),
+          fetch('/docs?project_id=_global', { headers: headers() }),
+        ]);
+        const projData = await rProj.json();
+        const globalData = await rGlobal.json();
+        this.projectDocs = [
+          ...(projData.documents || []),
+          ...(globalData.documents || []),
+        ];
       } catch (e) {
         this.toast('Failed to load project docs', 'error');
       }

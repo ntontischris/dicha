@@ -31,8 +31,12 @@ AS $$
   WITH
   -- Scope filter:
   --   'project'              = only this shop's docs
-  --   'project_and_plugins'  = shop docs + plugin reference docs (default)
-  --   'all'                  = shop docs + all global docs
+  --   'project_and_plugins'  = shop docs + ALL global docs (default)
+  --   'all'                  = shop docs + ALL global docs (alias)
+  -- Note: 'project_and_plugins' used to filter to category='plugin_docs' only,
+  -- which hid every admin-uploaded global doc that wasn't tagged that way.
+  -- Now any scope='global' row is visible — owners can upload manuals under
+  -- any category and the agent will still find them.
   eligible AS (
     SELECT d.id
     FROM documents d
@@ -40,8 +44,6 @@ AS $$
       CASE p_scope
         WHEN 'project' THEN
           d.project_id = p_project_id
-        WHEN 'project_and_plugins' THEN
-          d.project_id = p_project_id OR d.category = 'plugin_docs'
         ELSE
           d.project_id = p_project_id OR d.scope = 'global'
       END
