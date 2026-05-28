@@ -220,6 +220,14 @@ class WebhookInnerData(BaseModel):
     theme_info: ThemeInfo = ThemeInfo()
     theme_settings: ThemeSettings = ThemeSettings()
 
+    @field_validator("theme_settings", mode="before")
+    @classmethod
+    def coerce_empty_theme_settings(cls, v: object) -> object:
+        """PHP sends an empty theme_settings as [] (empty array) instead of {}."""
+        if isinstance(v, list):
+            return {}
+        return v
+
 
 class WebhookPayload(BaseModel):
     model_config = ConfigDict(extra="ignore")
