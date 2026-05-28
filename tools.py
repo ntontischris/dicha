@@ -1532,10 +1532,12 @@ TOOL_SCHEMAS = [
             "name": "search",
             "description": (
                 "Search ALL project knowledge: code snippets, functions.php, theme files, "
-                "company guides, project docs, AND plugin reference docs. "
-                "Plugin reference docs explain what plugin settings mean and how they work "
-                "(use category='plugin_docs' to search only these). "
-                "Always query in English. "
+                "company guides, project docs, AND plugin/theme reference docs (Woodmart "
+                "Guide, WP Rocket, Smart COD, Weight Based Shipping, etc.). This is the SOURCE "
+                "OF TRUTH for what a plugin or theme CAN do and HOW to enable it: use it for "
+                "any 'does X support Y / how do I turn on / is there a built-in feature' "
+                "question (set category='plugin_docs'). Plugin reference docs also explain what "
+                "raw plugin settings mean. Always query in English. "
                 "Tips: use function names from get_shop_config results as queries, "
                 "try without category first if results are poor, "
                 "search for 'dc_' prefix functions by name."
@@ -1619,10 +1621,14 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "search_settings",
             "description": (
-                "Search structured WooCommerce settings by domain. Returns exact configuration "
-                "data — payment gateways, shipping zones/methods, tax rates, checkout settings, "
-                "theme options, and plugin settings. Use for configuration questions (fees, "
-                "thresholds, enabled features, restrictions). For code questions, use search()."
+                "Look up THIS shop's CURRENTLY-STORED configuration VALUES by domain — "
+                "payment gateways, shipping zones/methods, tax rates, checkout, theme options, "
+                "and plugin settings (fees, thresholds, restrictions, which options are toggled "
+                "on/off). Returns ONLY values already saved in this shop's config. It is NOT "
+                "feature documentation and does NOT tell you what a plugin or theme is CAPABLE "
+                "of — an empty or missing result NEVER means a feature is unsupported. For "
+                "'does X support Y', 'how do I enable', or 'is there a built-in feature' "
+                "questions, use search() with category='plugin_docs'. For code, use search()."
             ),
             "parameters": {
                 "type": "object",
