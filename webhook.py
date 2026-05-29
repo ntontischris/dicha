@@ -109,6 +109,7 @@ class ChatRequest(BaseModel):
     project_id: str
     message: str
     session_id: str = ""
+    model_tier: str = "fast"
 
 
 class ChatResponse(BaseModel):
@@ -448,6 +449,15 @@ async def chat(
     session, sid = await _get_or_create_session(req.session_id, req.project_id)
     session.messages.append({"role": "user", "content": req.message})
 
+    tool_m, answer_m = config.resolve_tier(req.model_tier)
+    logger.info(
+        "chat: project=%s tier=%s models=%s/%s",
+        req.project_id,
+        req.model_tier,
+        tool_m,
+        answer_m,
+    )
+
     from agent import run_agent
 
     usage: dict = {}
@@ -458,7 +468,9 @@ async def chat(
         try:
             tools_used: list[str] = []
             full_reply = ""
-            for chunk in run_agent(session.messages, usage):
+            for chunk in run_agent(
+                session.messages, usage, tool_model=tool_m, answer_model=answer_m
+            ):
                 full_reply += chunk
             # Extract tool names from messages added during this run
             for msg in session.messages:
