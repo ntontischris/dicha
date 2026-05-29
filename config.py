@@ -24,7 +24,9 @@ MODEL_TIERS = {
     },
     "powerful": {
         "tool": os.getenv("TIER_POWERFUL_TOOL", "gpt-4.1"),
-        "answer": os.getenv("TIER_POWERFUL_ANSWER", "gpt-4.1-mini"),
+        "answer": os.getenv(
+            "TIER_POWERFUL_ANSWER", "gpt-4.1-mini"
+        ),  # final answer stays cheap
     },
 }
 DEFAULT_MODEL_TIER = "fast"

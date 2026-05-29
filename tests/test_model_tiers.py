@@ -10,11 +10,17 @@ import config
 
 
 def test_fast_tier_resolves_to_mini_mini():
-    assert config.resolve_tier("fast") == ("gpt-4.1-mini", "gpt-4.1-mini")
+    assert config.resolve_tier("fast") == (
+        config.MODEL_TIERS["fast"]["tool"],
+        config.MODEL_TIERS["fast"]["answer"],
+    )
 
 
 def test_powerful_tier_resolves_to_full_tool_mini_answer():
-    assert config.resolve_tier("powerful") == ("gpt-4.1", "gpt-4.1-mini")
+    assert config.resolve_tier("powerful") == (
+        config.MODEL_TIERS["powerful"]["tool"],
+        config.MODEL_TIERS["powerful"]["answer"],
+    )
 
 
 def test_unknown_tier_falls_back_to_default():
