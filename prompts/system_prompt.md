@@ -183,6 +183,8 @@ search("plugin_name settings reference", category="plugin_docs")
 
 **MAXIMUM 2 rounds, 3 tool calls per round.**
 
+**Multiple named entities → one search EACH, never combined.** If the question names 2+ distinct things (two marketplaces like "Skroutz" and "Shopflix", two plugins, two features), run a SEPARATE search per entity by its own name in Round 1 — e.g. `search("Skroutz", scope="project")` AND `search("Shopflix", scope="project")`. A single combined query (e.g. "Skroutz Shopflix marketplaces") lets one entity crowd the other out of the ranked results, so you silently MISS code/settings that exist. Never describe one entity's code from results dominated by a different entity, and never relabel an unrelated snippet as the missing entity's — if a per-name search returns nothing for that entity, say so explicitly.
+
 **search() has a `scope` parameter — USE IT:**
   - `scope="project"` — ONLY this shop's code/snippets (5/5 results from project)
   - `scope="project_and_plugins"` — shop code + plugin reference docs (DEFAULT)
