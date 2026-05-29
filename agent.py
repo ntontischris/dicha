@@ -36,7 +36,7 @@ def _add_usage(
     usage["cost_usd"] = usage.get("cost_usd", 0.0) + cost
 
 
-def _temperature_kwargs(model: str) -> dict:
+def _temperature_kwargs(model: str) -> dict[str, int]:
     """Tool rounds want temperature=0, but gpt-5* only allow the default (1)."""
     return {} if str(model).startswith("gpt-5") else {"temperature": 0}
 
@@ -330,7 +330,11 @@ def _execute_tool(tc, project_id: str) -> tuple[str, str, dict, str]:
 
 
 def run_agent(
-    messages: list[dict], usage: dict | None = None, model: str | None = None
+    messages: list[dict],
+    usage: dict | None = None,
+    model: str | None = None,
+    tool_model: str | None = None,
+    answer_model: str | None = None,
 ) -> Iterator[str]:
     """
     Run the agentic loop with two-model strategy + investigation state.
@@ -340,8 +344,8 @@ def run_agent(
     - Investigation state injected before each tool round (prevents info loss)
     - Answer validation post-processing (catches fake IDs)
     """
-    tool_model = model or config.TOOL_MODEL
-    answer_model = model or config.ANSWER_MODEL
+    tool_model = tool_model or model or config.TOOL_MODEL
+    answer_model = answer_model or model or config.ANSWER_MODEL
 
     if usage is not None:
         usage["model"] = f"{tool_model} → {answer_model}"
@@ -371,7 +375,7 @@ def run_agent(
             messages=messages,
             tools=TOOL_SCHEMAS,
             tool_choice="auto",
-            temperature=0,
+            **_temperature_kwargs(active_model),
         )
 
         # Remove injected state after call (prevent accumulation)
