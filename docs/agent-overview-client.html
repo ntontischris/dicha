@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="el">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WooCommerce AI Agent — Πλήρης Τεκμηρίωση</title>
+  <style>
+    @media print {
+      body { font-size: 11pt; }
+      .page-break { page-break-before: always; }
+      h2 { page-break-after: avoid; }
+      table, pre { page-break-inside: avoid; }
+      .no-print { display: none; }
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+      line-height: 1.7;
+      color: #1a1a2e;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 40px 50px;
+      background: #fff;
+    }
+
+    h1 {
+      font-size: 28pt;
+      color: #1a1a2e;
+      border-bottom: 4px solid #6c5ce7;
+      padding-bottom: 16px;
+      margin-bottom: 12px;
+    }
+
+    .subtitle {
+      font-size: 13pt;
+      color: #636e72;
+      margin-bottom: 40px;
+    }
+
+    h2 {
+      font-size: 18pt;
+      color: #6c5ce7;
+      margin-top: 44px;
+      margin-bottom: 16px;
+      padding-bottom: 8px;
+      border-bottom: 2px solid #dfe6e9;
+    }
+
+    h3 {
+      font-size: 13pt;
+      color: #2d3436;
+      margin-top: 24px;
+      margin-bottom: 10px;
+    }
+
+    p { margin-bottom: 12px; }
+
+    strong { color: #2d3436; }
+
+    ul, ol {
+      margin-bottom: 14px;
+      padding-left: 24px;
+    }
+
+    li { margin-bottom: 6px; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 16px 0 24px;
+      font-size: 10pt;
+    }
+
+    th {
+      background: #6c5ce7;
+      color: white;
+      padding: 10px 14px;
+      text-align: left;
+      font-weight: 600;
+    }
+
+    td {
+      padding: 9px 14px;
+      border-bottom: 1px solid #dfe6e9;
+    }
+
+    tr:nth-child(even) { background: #f8f9ff; }
+
+    .diagram {
+      background: #2d3436;
+      color: #dfe6e9;
+      padding: 20px 24px;
+      border-radius: 8px;
+      font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+      font-size: 9.5pt;
+      line-height: 1.6;
+      overflow-x: auto;
+      white-space: pre;
+      margin: 16px 0 24px;
+    }
+
+    .highlight-box {
+      background: #f0edff;
+      border-left: 4px solid #6c5ce7;
+      padding: 16px 20px;
+      border-radius: 0 8px 8px 0;
+      margin: 16px 0 24px;
+    }
+
+    .highlight-box p { margin-bottom: 0; }
+
+    .warning-box {
+      background: #fff3e0;
+      border-left: 4px solid #ff9800;
+      padding: 16px 20px;
+      border-radius: 0 8px 8px 0;
+      margin: 16px 0 24px;
+    }
+
+    .comparison-table td:first-child { font-weight: 600; width: 30%; }
+    .comparison-table .yes { color: #00b894; font-weight: 600; }
+    .comparison-table .no { color: #d63031; }
+
+    .flow-step {
+      display: flex;
+      align-items: flex-start;
+      margin-bottom: 20px;
+    }
+
+    .flow-number {
+      background: #6c5ce7;
+      color: white;
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 14pt;
+      flex-shrink: 0;
+      margin-right: 16px;
+      margin-top: 2px;
+    }
+
+    .flow-content { flex: 1; }
+    .flow-content strong { display: block; margin-bottom: 4px; }
+
+    .badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-size: 9pt;
+      font-weight: 600;
+      margin-right: 6px;
+    }
+
+    .badge-purple { background: #6c5ce7; color: white; }
+    .badge-green { background: #00b894; color: white; }
+    .badge-blue { background: #0984e3; color: white; }
+    .badge-orange { background: #ff9800; color: white; }
+
+    .toc {
+      background: #f8f9ff;
+      border: 1px solid #dfe6e9;
+      border-radius: 8px;
+      padding: 24px 30px;
+      margin: 30px 0;
+    }
+
+    .toc h3 { margin-top: 0; color: #6c5ce7; }
+
+    .toc ol { padding-left: 20px; }
+    .toc li { margin-bottom: 4px; }
+    .toc a { color: #6c5ce7; text-decoration: none; }
+    .toc a:hover { text-decoration: underline; }
+
+    .print-btn {
+      position: fixed;
+      bottom: 30px;
+      right: 30px;
+      background: #6c5ce7;
+      color: white;
+      border: none;
+      padding: 14px 28px;
+      border-radius: 30px;
+      font-size: 12pt;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 4px 16px rgba(108, 92, 231, 0.4);
+      transition: all 0.2s;
+    }
+
+    .print-btn:hover {
+      background: #5a4bd1;
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(108, 92, 231, 0.5);
+    }
+
+    .footer {
+      margin-top: 60px;
+      padding-top: 20px;
+      border-top: 2px solid #dfe6e9;
+      text-align: center;
+      color: #b2bec3;
+      font-size: 10pt;
+    }
+
+    code {
+      background: #f0edff;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+      font-size: 9.5pt;
+      color: #6c5ce7;
+    }
+
+    hr {
+      border: none;
+      border-top: 1px solid #dfe6e9;
+      margin: 32px 0;
+    }
+  </style>
+</head>
+<body>
+
+<button class="print-btn no-print" onclick="window.print()">Εκτύπωση</button>
+
+<h1>WooCommerce AI Agent</h1>
+<p class="subtitle">Πλήρης Τεκμηρίωση Λειτουργίας &amp; Αρχιτεκτονικής</p>
+
+<!-- Table of Contents -->
+<div class="toc">
+  <h3>Περιεχόμενα</h3>
+  <ol>
+    <li><a href="#what">Τι είναι</a></li>
+    <li><a href="#overview">Πώς λειτουργεί — Επισκόπηση</a></li>
+    <li><a href="#sync">Φάση 1: Sync — Τι δεδομένα συλλέγονται</a></li>
+    <li><a href="#processing">Φάση 2: Επεξεργασία Δεδομένων</a></li>
+    <li><a href="#search">Φάση 3: Αναζήτηση &amp; Απάντηση</a></li>
+    <li><a href="#layers">3 Επίπεδα Περιεχομένου</a></li>
+    <li><a href="#usage">Τρόποι Χρήσης</a></li>
+    <li><a href="#tech">Τεχνικά Χαρακτηριστικά</a></li>
+    <li><a href="#example">Παράδειγμα Ροής</a></li>
+    <li><a href="#comparison">Σύγκριση με ChatGPT</a></li>
+    <li><a href="#api">Endpoints API</a></li>
+    <li><a href="#cost">Κόστος Λειτουργίας</a></li>
+  </ol>
+</div>
+
+<!-- 1. What -->
+<h2 id="what">Τι είναι</h2>
+<p>
+  Ένας <strong>AI assistant εξειδικευμένος σε WooCommerce</strong>, που γνωρίζει
+  <strong>τον κώδικα, τις ρυθμίσεις και τα plugins</strong> του κάθε shop ξεχωριστά.
+  Απαντάει σε ερωτήσεις, εντοπίζει bugs, προτείνει αλλαγές κώδικα και εξηγεί πώς
+  λειτουργεί το κάθε shop.
+</p>
+
+<!-- 2. Overview -->
+<h2 id="overview">Πώς λειτουργεί — Επισκόπηση</h2>
+
+<div class="diagram">WooCommerce Shop                         AI Agent
+     │                                      │
+     │  1. Sync (αυτόματο)                  │
+     ├─────────────────────────────────────►│
+     │  Plugin στέλνει όλα τα δεδομένα      │
+     │  (κώδικας, ρυθμίσεις, plugins)       │
+     │                                      │
+     │  2. Ερώτηση χρήστη                   │
+     │  "Πώς αλλάζω τα μεταφορικά;"        │
+     ├─────────────────────────────────────►│
+     │                                      │  ← Ψάχνει στον κώδικα &amp; ρυθμίσεις
+     │                                      │  ← Βρίσκει σχετικά snippets
+     │                                      │  ← Δίνει απάντηση με κώδικα
+     │  3. Απάντηση                         │
+     │◄────────────────────────────────────┤
+     │  Έτοιμος κώδικας + εξήγηση          │</div>
+
+<!-- 3. Sync -->
+<h2 id="sync">Φάση 1: Sync — Τι δεδομένα συλλέγονται</h2>
+
+<p>
+  Ένα WordPress plugin εγκαθίσταται στο shop και στέλνει <strong>αυτόματα</strong>
+  τα παρακάτω δεδομένα στο σύστημα:
+</p>
+
+<h3>Κώδικας</h3>
+<table>
+  <thead><tr><th>Τι</th><th>Παράδειγμα</th></tr></thead>
+  <tbody>
+    <tr><td>Code Snippets</td><td>Κανόνες μεταφορικών, custom checkout fields, price modifications</td></tr>
+    <tr><td>functions.php</td><td>Custom functions του theme</td></tr>
+    <tr><td>Theme files</td><td>Templates, single-product.php, cart.php κλπ</td></tr>
+  </tbody>
+</table>
+
+<h3>Ρυθμίσεις WooCommerce</h3>
+<table>
+  <thead><tr><th>Τι</th><th>Παράδειγμα</th></tr></thead>
+  <tbody>
+    <tr><td>Payment Gateways</td><td>Stripe, PayPal, Τραπεζική κατάθεση — ποια είναι ενεργά</td></tr>
+    <tr><td>Shipping Zones</td><td>Ηπειρωτική, Νησιά, Αθήνα — ζώνες &amp; μέθοδοι αποστολής</td></tr>
+    <tr><td>Shipping Methods</td><td>Flat rate κόστη, free shipping thresholds, class costs</td></tr>
+    <tr><td>Tax Settings</td><td>ΦΠΑ, τιμές με/χωρίς φόρο</td></tr>
+    <tr><td>General Settings</td><td>Νόμισμα, τοποθεσία, stock management, guest checkout</td></tr>
+  </tbody>
+</table>
+
+<h3>Plugins</h3>
+<table>
+  <thead><tr><th>Τι</th><th>Παράδειγμα</th></tr></thead>
+  <tbody>
+    <tr><td>Active Plugins</td><td>Όνομα, version, author</td></tr>
+    <tr><td>Plugin Settings</td><td>Αναλυτικές ρυθμίσεις κάθε plugin</td></tr>
+  </tbody>
+</table>
+
+<div class="highlight-box">
+  <p><strong>Σημαντικό:</strong> Κάθε shop έχει τα δικά του δεδομένα, πλήρως απομονωμένα. Ο agent ενός shop δεν βλέπει δεδομένα άλλου shop.</p>
+</div>
+
+<!-- 4. Processing -->
+<div class="page-break"></div>
+<h2 id="processing">Φάση 2: Επεξεργασία Δεδομένων</h2>
+
+<p>Μόλις ληφθούν τα δεδομένα, γίνεται αυτόματη επεξεργασία σε <strong>2 κλάδους</strong>:</p>
+
+<h3>Κλάδος Α — Δομημένα Δεδομένα (8 πίνακες)</h3>
+<p>Τα δεδομένα αποθηκεύονται σε σχεσιακούς πίνακες για γρήγορη πρόσβαση:</p>
+<ul>
+  <li>Πληροφορίες project (URL, versions, theme)</li>
+  <li>Payment gateways</li>
+  <li>Shipping zones &amp; methods (με instance_id, κόστη, class costs)</li>
+  <li>Tax settings &amp; rates</li>
+  <li>General settings</li>
+  <li>Active plugins &amp; ρυθμίσεις plugins</li>
+</ul>
+
+<h3>Κλάδος Β — AI Αναζήτηση (Vector Pipeline)</h3>
+<p>Ο κώδικας περνάει από <strong>5 στάδια</strong> επεξεργασίας:</p>
+
+<div class="flow-step">
+  <div class="flow-number">1</div>
+  <div class="flow-content">
+    <strong>Chunking</strong>
+    Κόβει τον κώδικα σε λογικά κομμάτια (ανά function)
+  </div>
+</div>
+<div class="flow-step">
+  <div class="flow-number">2</div>
+  <div class="flow-content">
+    <strong>Extraction</strong>
+    Εντοπίζει hooks, functions, κατηγορία (shipping, checkout κλπ)
+  </div>
+</div>
+<div class="flow-step">
+  <div class="flow-number">3</div>
+  <div class="flow-content">
+    <strong>Context</strong>
+    AI δημιουργεί σύντομη περιγραφή κάθε κομματιού (2-4 προτάσεις)
+  </div>
+</div>
+<div class="flow-step">
+  <div class="flow-number">4</div>
+  <div class="flow-content">
+    <strong>Embedding</strong>
+    Μετατρέπει σε vector για semantic search (1536 διαστάσεις)
+  </div>
+</div>
+<div class="flow-step">
+  <div class="flow-number">5</div>
+  <div class="flow-content">
+    <strong>Αποθήκευση</strong>
+    Parent (πλήρες αρχείο) + Children (κομμάτια με embeddings)
+  </div>
+</div>
+
+<div class="highlight-box">
+  <p><strong>Γιατί τόσα στάδια;</strong> Για να βρίσκει ο agent τον σωστό κώδικα ακόμα κι αν ο χρήστης ρωτήσει με δικά του λόγια (π.χ. "πώς λειτουργούν τα μεταφορικά" βρίσκει functions που ασχολούνται με shipping).</p>
+</div>
+
+<!-- 5. Search & Answer -->
+<h2 id="search">Φάση 3: Αναζήτηση &amp; Απάντηση</h2>
+
+<p>Όταν ο χρήστης κάνει ερώτηση, ο agent ακολουθεί αυτή τη διαδικασία:</p>
+
+<h3>Βήμα 1 — Κατανόηση ερώτησης</h3>
+<p>Ο agent αναγνωρίζει τον τύπο ερώτησης:</p>
+<ul>
+  <li><span class="badge badge-purple">Feature Request</span> Γράφει νέο ή τροποποιημένο κώδικα</li>
+  <li><span class="badge badge-orange">Bug Report</span> Ψάχνει τον υπάρχοντα κώδικα, εντοπίζει το πρόβλημα, προτείνει fix</li>
+  <li><span class="badge badge-blue">Ρυθμίσεις</span> Εξηγεί πώς να αλλάξει κάτι στο WooCommerce admin</li>
+  <li><span class="badge badge-green">Εννοιολογική</span> Εξηγεί πώς λειτουργεί κάτι</li>
+</ul>
+
+<h3>Βήμα 2 — Αναζήτηση (Hybrid Search)</h3>
+<p>Ο agent χρησιμοποιεί <strong>4 εξειδικευμένα εργαλεία</strong>:</p>
+
+<table>
+  <thead><tr><th>Εργαλείο</th><th>Τι κάνει</th><th>Παράδειγμα</th></tr></thead>
+  <tbody>
+    <tr><td><code>search</code></td><td>Ψάχνει κώδικα &amp; docs με AI + keywords</td><td>"free shipping rules"</td></tr>
+    <tr><td><code>search_by_hook</code></td><td>Βρίσκει κώδικα που χρησιμοποιεί συγκεκριμένο hook</td><td>"woocommerce_package_rates"</td></tr>
+    <tr><td><code>get_shop_config</code></td><td>Φέρνει όλες τις ρυθμίσεις του shop</td><td>Payment, shipping, tax, plugins</td></tr>
+    <tr><td><code>search_plugin_settings</code></td><td>Ψάχνει ρυθμίσεις plugins</td><td>"WooCommerce PDF Invoices"</td></tr>
+  </tbody>
+</table>
+
+<p><strong>Η αναζήτηση είναι υβριδική (3 σήματα):</strong></p>
+<ol>
+  <li><strong>Vector Search</strong> — Βρίσκει σημασιολογικά παρόμοιο κώδικα (AI)</li>
+  <li><strong>Full-Text Search</strong> — Βρίσκει ακριβείς λέξεις-κλειδιά (keywords)</li>
+  <li><strong>RRF Fusion</strong> — Συνδυάζει τα 2 σήματα σε ενιαίο score</li>
+</ol>
+
+<div class="highlight-box">
+  <p><strong>+ Cohere Reranking:</strong> Ένα δεύτερο AI μοντέλο ξαναβαθμολογεί τα αποτελέσματα για μέγιστη ακρίβεια. Από 30 υποψήφια αποτελέσματα, επιλέγονται τα 5 καλύτερα.</p>
+</div>
+
+<h3>Βήμα 3 — Απάντηση</h3>
+<p>Ο agent παράγει:</p>
+<ul>
+  <li><strong>2-3 γραμμές</strong> εξήγηση τι υπάρχει &amp; τι αλλάζει</li>
+  <li><strong>Πλήρη PHP κώδικα</strong> (copy-paste ready)</li>
+  <li><strong>1 γραμμή</strong> πού να τον τοποθετήσει</li>
+  <li>Χρησιμοποιεί <strong>πραγματικά IDs</strong> από τις ρυθμίσεις του shop (όχι placeholders)</li>
+</ul>
+
+<!-- 6. Content Layers -->
+<div class="page-break"></div>
+<h2 id="layers">3 Επίπεδα Περιεχομένου</h2>
+
+<table>
+  <thead><tr><th>Επίπεδο</th><th>Τι περιέχει</th><th>Ποιος το βλέπει</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><span class="badge badge-purple">Project Code</span></td>
+      <td>Code snippets, functions.php, theme files</td>
+      <td>Μόνο το συγκεκριμένο shop</td>
+    </tr>
+    <tr>
+      <td><span class="badge badge-green">Company Docs</span></td>
+      <td>Οδηγοί, knowledge base, best practices</td>
+      <td>Όλα τα shops</td>
+    </tr>
+    <tr>
+      <td><span class="badge badge-blue">Project Docs</span></td>
+      <td>Σημειώσεις πελάτη, custom οδηγίες</td>
+      <td>Μόνο το συγκεκριμένο shop</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- 7. Usage -->
+<h2 id="usage">Τρόποι Χρήσης</h2>
+
+<h3>1. Web Chat</h3>
+<ul>
+  <li>Web-based interface με ιστορικό συνομιλίας</li>
+  <li>Εμφάνιση κόστους ανά ερώτηση</li>
+  <li>Κατάλληλο για non-technical χρήστες</li>
+</ul>
+
+<h3>2. API (<code>POST /chat</code>)</h3>
+<ul>
+  <li>Για ενσωμάτωση σε 3rd party εφαρμογές (WordPress admin, mobile app κλπ)</li>
+  <li>Stateful sessions — κρατάει ιστορικό συνομιλίας</li>
+  <li>Επιστρέφει: απάντηση, session_id, εργαλεία που χρησιμοποίησε, usage</li>
+</ul>
+
+<h3>3. CLI (Command Line)</h3>
+<ul>
+  <li>Για developers</li>
+  <li>Rich markdown rendering</li>
+  <li>Logging ανά session</li>
+</ul>
+
+<!-- 8. Tech -->
+<h2 id="tech">Τεχνικά Χαρακτηριστικά</h2>
+
+<h3>Μοντέλα AI</h3>
+<table>
+  <thead><tr><th>Χρήση</th><th>Μοντέλο</th><th>Γιατί</th></tr></thead>
+  <tbody>
+    <tr><td>Tool calling (αναζήτηση)</td><td>GPT-4.1-mini</td><td>Γρήγορο, ακριβές, χαμηλό κόστος</td></tr>
+    <tr><td>Τελική απάντηση</td><td>GPT-4.1-mini</td><td>Ποιοτική απάντηση</td></tr>
+    <tr><td>Contextual Retrieval</td><td>GPT-4o-mini</td><td>Σύντομες περιγραφές ανά chunk</td></tr>
+    <tr><td>Embeddings</td><td>text-embedding-3-large</td><td>1536 διαστάσεις, υψηλή ακρίβεια</td></tr>
+    <tr><td>Reranking</td><td>Cohere rerank-v3.5</td><td>Cross-encoder reranking</td></tr>
+  </tbody>
+</table>
+
+<h3>Performance</h3>
+<ul>
+  <li><strong>Caching:</strong> Config 5 λεπτά, search 10 λεπτά, embeddings 1 ώρα</li>
+  <li><strong>Parallel execution:</strong> Εργαλεία εκτελούνται παράλληλα</li>
+  <li><strong>Context management:</strong> Αυτόματο trimming παλιών μηνυμάτων</li>
+  <li><strong>Session cleanup:</strong> Αυτόματο μετά 30 λεπτά αδράνειας</li>
+</ul>
+
+<h3>Ασφάλεια</h3>
+<ul>
+  <li>Κάθε shop βλέπει <strong>μόνο</strong> τα δικά του δεδομένα</li>
+  <li>Webhook authentication με secret key</li>
+  <li>Τα global docs (company knowledge base) είναι κοινά σε όλα τα shops</li>
+  <li>Row Level Security στη βάση δεδομένων</li>
+</ul>
+
+<h3>Deployment</h3>
+<table>
+  <thead><tr><th>Παράμετρος</th><th>Τιμή</th></tr></thead>
+  <tbody>
+    <tr><td>Platform</td><td>Railway</td></tr>
+    <tr><td>Runtime</td><td>Python 3.11</td></tr>
+    <tr><td>Health check</td><td><code>GET /health</code></td></tr>
+    <tr><td>Auto-restart</td><td>On failure (max 3 retries)</td></tr>
+  </tbody>
+</table>
+
+<!-- 9. Example -->
+<div class="page-break"></div>
+<h2 id="example">Παράδειγμα Ροής</h2>
+
+<div class="warning-box">
+  <p><strong>Ερώτηση:</strong> "Θέλω να βάλω δωρεάν μεταφορικά πάνω από 50 ευρώ μόνο για Αθήνα"</p>
+</div>
+
+<div class="flow-step">
+  <div class="flow-number">1</div>
+  <div class="flow-content">
+    <strong>Κατανόηση</strong>
+    Ο agent αναγνωρίζει: <span class="badge badge-purple">Feature Request</span> → χρειάζεται κώδικα
+  </div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-number">2</div>
+  <div class="flow-content">
+    <strong>Tool Round 1 (παράλληλα)</strong>
+    <ul>
+      <li><code>search("free shipping threshold Athens")</code> → Βρίσκει υπάρχοντα κώδικα μεταφορικών</li>
+      <li><code>get_shop_config()</code> → Βλέπει shipping zones: Αθήνα (zone_id: 3), instance_id: 15</li>
+    </ul>
+  </div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-number">3</div>
+  <div class="flow-content">
+    <strong>Ανάλυση αποτελεσμάτων</strong>
+    <ul>
+      <li>Υπάρχει ήδη function <code>dc_custom_shipping()</code> → θα τη τροποποιήσει</li>
+      <li>Zone Αθήνα = zone_id 3, free_shipping instance = 15</li>
+      <li>Threshold τώρα: 0&euro; (disabled)</li>
+    </ul>
+  </div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-number">4</div>
+  <div class="flow-content">
+    <strong>Απάντηση</strong>
+    "Υπάρχει ήδη η <code>dc_custom_shipping()</code>. Προσθέτω condition για free shipping στην Αθήνα πάνω από 50&euro;:"
+    <br><br>
+    <em>[Πλήρης PHP κώδικας με πραγματικά IDs]</em>
+    <br><br>
+    "Τοποθέτησε στο Code Snippets → dc_custom_shipping"
+  </div>
+</div>
+
+<!-- 10. Comparison -->
+<h2 id="comparison">Τι το κάνει διαφορετικό από ChatGPT</h2>
+
+<table class="comparison-table">
+  <thead><tr><th></th><th>Generic ChatGPT</th><th>WooCommerce AI Agent</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Γνωρίζει τον κώδικά σου</td>
+      <td class="no">Όχι</td>
+      <td class="yes">Ναι — ψάχνει στον πραγματικό κώδικα</td>
+    </tr>
+    <tr>
+      <td>Χρησιμοποιεί πραγματικά IDs</td>
+      <td class="no">Όχι — βάζει placeholders</td>
+      <td class="yes">Ναι — instance_id, zone_id, gateway_id</td>
+    </tr>
+    <tr>
+      <td>Γνωρίζει τις ρυθμίσεις σου</td>
+      <td class="no">Όχι</td>
+      <td class="yes">Ναι — payment, shipping, tax, plugins</td>
+    </tr>
+    <tr>
+      <td>Βρίσκει bugs στον κώδικά σου</td>
+      <td class="no">Όχι</td>
+      <td class="yes">Ναι — ψάχνει, εντοπίζει, προτείνει fix</td>
+    </tr>
+    <tr>
+      <td>Reuses τα helpers σου</td>
+      <td class="no">Όχι</td>
+      <td class="yes">Ναι — χρησιμοποιεί υπάρχοντα functions</td>
+    </tr>
+    <tr>
+      <td>Multi-tenant</td>
+      <td class="no">N/A</td>
+      <td class="yes">Κάθε shop έχει απομονωμένα δεδομένα</td>
+    </tr>
+    <tr>
+      <td>Ελληνικά</td>
+      <td class="no">Βασική υποστήριξη</td>
+      <td class="yes">Πλήρης — αναζήτηση, expansion, απάντηση</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- 11. API -->
+<h2 id="api">Endpoints API</h2>
+
+<table>
+  <thead><tr><th>Method</th><th>Path</th><th>Περιγραφή</th></tr></thead>
+  <tbody>
+    <tr><td><span class="badge badge-green">POST</span></td><td><code>/webhook</code></td><td>Sync δεδομένων από WooCommerce plugin</td></tr>
+    <tr><td><span class="badge badge-green">POST</span></td><td><code>/chat</code></td><td>Αποστολή ερώτησης &amp; λήψη απάντησης</td></tr>
+    <tr><td><span class="badge badge-green">POST</span></td><td><code>/docs</code></td><td>Upload εγγράφου (company/project doc)</td></tr>
+    <tr><td><span class="badge badge-green">POST</span></td><td><code>/docs/bulk</code></td><td>Bulk upload εγγράφων</td></tr>
+    <tr><td><span class="badge badge-blue">GET</span></td><td><code>/docs</code></td><td>Λίστα εγγράφων ανά project</td></tr>
+    <tr><td><span class="badge badge-blue">GET</span></td><td><code>/docs/{id}</code></td><td>Λήψη εγγράφου</td></tr>
+    <tr><td><span class="badge badge-orange">DELETE</span></td><td><code>/docs</code></td><td>Διαγραφή εγγράφων</td></tr>
+    <tr><td><span class="badge badge-blue">GET</span></td><td><code>/health</code></td><td>Health check</td></tr>
+    <tr><td><span class="badge badge-blue">GET</span></td><td><code>/admin</code></td><td>Admin dashboard</td></tr>
+    <tr><td><span class="badge badge-blue">GET</span></td><td><code>/api/projects</code></td><td>Λίστα projects</td></tr>
+    <tr><td><span class="badge badge-green">POST</span></td><td><code>/api/re-ingest</code></td><td>Επανεπεξεργασία εγγράφων</td></tr>
+  </tbody>
+</table>
+
+<!-- 12. Cost -->
+<h2 id="cost">Κόστος Λειτουργίας</h2>
+
+<p>Το κόστος εξαρτάται από τη χρήση:</p>
+
+<table>
+  <thead><tr><th>Λειτουργία</th><th>Κόστος</th><th>Πότε</th></tr></thead>
+  <tbody>
+    <tr><td>Sync (per shop)</td><td>~$0.05 – $0.15</td><td>Κάθε φορά που γίνεται sync</td></tr>
+    <tr><td>Ερώτηση (απλή)</td><td>~$0.002 – $0.005</td><td>1 tool round</td></tr>
+    <tr><td>Ερώτηση (σύνθετη)</td><td>~$0.005 – $0.015</td><td>2 tool rounds</td></tr>
+    <tr><td>Reranking (Cohere)</td><td>~$0.001 / query</td><td>Ανά αναζήτηση</td></tr>
+    <tr><td>Embeddings</td><td>~$0.0001 / query</td><td>Cached 1 ώρα</td></tr>
+  </tbody>
+</table>
+
+<p><em>Τιμές ενδεικτικές, εξαρτώνται από μέγεθος κώδικα &amp; μήκος συνομιλίας.</em></p>
+
+<!-- Footer -->
+<div class="footer">
+  <p>WooCommerce AI Agent — dicha &copy; 2026</p>
+</div>
+
+</body>
+</html>

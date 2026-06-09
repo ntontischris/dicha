@@ -1,0 +1,14 @@
+# Copy this to "Caddyfile" and replace the hostname with your real one.
+# Caddy auto-provisions a free Let's Encrypt TLS certificate for the hostname below.
+#
+# Free hostname options (no domain purchase):
+#   - DuckDNS (recommended): e.g. dicha-agent.duckdns.org
+#       stable name — if the VPS IP changes, update it once on DuckDNS, shops untouched.
+#   - nip.io (instant):      e.g. 203-0-113-45.nip.io  (dashes = your VPS IPv4)
+#       zero setup, but the name contains the IP, so an IP change means re-pointing every shop.
+#
+# Requirements before first start: DNS must resolve to this VPS, and ports 80 + 443 open.
+
+your-host.duckdns.org {
+    reverse_proxy app:8000
+}
