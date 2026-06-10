@@ -75,6 +75,11 @@ In every shop's WP admin → **Settings → Agency Sync Agent**:
 - **Project ID:** a **unique** id per shop
 Then **Save → Test Connection → Run Sync Now**.
 
+The plugin itself lives in this repo under [`wp-plugin/`](wp-plugin/):
+- `wp-plugin/dicha-sync-v3.zip` — ready to install (WP admin → Plugins → Add New → Upload Plugin)
+- `wp-plugin/dicha-sync-v3/` — plugin source
+- After editing the source, rebuild the zip with `python wp-plugin/make_zip.py`
+
 ## Operations
 - Auto-restart on crash/reboot: `restart: unless-stopped` (already set).
 - Logs: `docker compose logs -f app`.

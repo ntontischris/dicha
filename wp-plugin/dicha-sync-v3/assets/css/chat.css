@@ -1,0 +1,323 @@
+/* Chat UI Styles — WP Admin */
+
+.asa-chat-wrap {
+    max-width: 900px;
+    margin: 0 auto;
+}
+
+.asa-chat-container {
+    background: #fff;
+    border: 1px solid #ccd0d4;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    height: 70vh;
+    min-height: 400px;
+}
+
+.asa-chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.asa-msg {
+    max-width: 80%;
+    padding: 12px 16px;
+    border-radius: 12px;
+    line-height: 1.5;
+    font-size: 14px;
+    word-wrap: break-word;
+}
+
+.asa-msg-user {
+    align-self: flex-end;
+    background: #2271b1;
+    color: #fff;
+    border-bottom-right-radius: 4px;
+}
+
+.asa-msg-agent {
+    align-self: flex-start;
+    background: #f0f0f1;
+    color: #1d2327;
+    border-bottom-left-radius: 4px;
+}
+
+.asa-msg-agent pre {
+    background: #1d2327;
+    color: #e0e0e0;
+    padding: 12px;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 13px;
+    margin: 8px 0;
+}
+
+.asa-msg-agent code {
+    background: #dcdcde;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 13px;
+}
+
+.asa-msg-agent pre code {
+    background: none;
+    padding: 0;
+}
+
+.asa-msg-meta {
+    font-size: 11px;
+    color: #999;
+    margin-top: 4px;
+}
+
+.asa-chat-input-area {
+    display: flex;
+    gap: 8px;
+    padding: 12px 16px;
+    border-top: 1px solid #ccd0d4;
+    background: #f6f7f7;
+    border-radius: 0 0 8px 8px;
+}
+
+.asa-chat-input {
+    flex: 1;
+    padding: 10px 14px;
+    border: 1px solid #ccd0d4;
+    border-radius: 6px;
+    font-size: 14px;
+    resize: none;
+    min-height: 42px;
+    max-height: 120px;
+    font-family: inherit;
+}
+
+.asa-chat-input:focus {
+    border-color: #2271b1;
+    box-shadow: 0 0 0 1px #2271b1;
+    outline: none;
+}
+
+.asa-chat-send {
+    padding: 10px 20px;
+    background: #2271b1;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.asa-chat-send:hover {
+    background: #135e96;
+}
+
+.asa-chat-send:disabled {
+    background: #a7aaad;
+    cursor: not-allowed;
+}
+
+.asa-typing {
+    display: flex;
+    gap: 4px;
+    padding: 12px 16px;
+    align-self: flex-start;
+}
+
+.asa-typing span {
+    width: 8px;
+    height: 8px;
+    background: #a7aaad;
+    border-radius: 50%;
+    animation: asa-bounce 1.4s infinite ease-in-out;
+}
+
+.asa-typing span:nth-child(1) { animation-delay: 0s; }
+.asa-typing span:nth-child(2) { animation-delay: 0.2s; }
+.asa-typing span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes asa-bounce {
+    0%, 80%, 100% { transform: scale(0); }
+    40% { transform: scale(1); }
+}
+
+/* Tabs */
+.asa-tabs {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid #ccd0d4;
+    margin-bottom: 20px;
+}
+
+.asa-tab {
+    padding: 12px 24px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    border-bottom: none;
+    background: none;
+    font-size: 14px;
+    color: #50575e;
+    margin-bottom: -1px;
+}
+
+.asa-tab:hover {
+    color: #2271b1;
+}
+
+.asa-tab.active {
+    background: #fff;
+    border-color: #ccd0d4;
+    border-bottom-color: #fff;
+    color: #1d2327;
+    font-weight: 600;
+}
+
+.asa-tab-content {
+    display: none;
+}
+
+.asa-tab-content.active {
+    display: block;
+}
+
+/* Documents tab */
+.asa-docs-list {
+    background: #fff;
+    border: 1px solid #ccd0d4;
+    border-radius: 4px;
+}
+
+.asa-doc-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid #f0f0f1;
+}
+
+.asa-doc-item:last-child {
+    border-bottom: none;
+}
+
+.asa-doc-upload-form {
+    background: #fff;
+    border: 1px solid #ccd0d4;
+    padding: 20px;
+    border-radius: 4px;
+    margin-top: 20px;
+}
+
+/* Floating Bubble */
+.asa-bubble-btn {
+    position: fixed;
+    bottom: 30px;
+    right: 30px;
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    background: #2271b1;
+    color: #fff;
+    border: none;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    font-size: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 99999;
+    transition: transform 0.2s, background 0.2s;
+}
+
+.asa-bubble-btn:hover {
+    transform: scale(1.1);
+    background: #135e96;
+}
+
+.asa-bubble-window {
+    position: fixed;
+    bottom: 100px;
+    right: 30px;
+    width: 400px;
+    height: 500px;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+    display: none;
+    flex-direction: column;
+    z-index: 99998;
+    overflow: hidden;
+}
+
+.asa-bubble-window.open {
+    display: flex;
+}
+
+.asa-bubble-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    background: #2271b1;
+    color: #fff;
+    font-weight: 600;
+}
+
+.asa-bubble-close {
+    background: none;
+    border: none;
+    color: #fff;
+    font-size: 20px;
+    cursor: pointer;
+    padding: 0 4px;
+}
+
+.asa-bubble-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.asa-bubble-input-area {
+    display: flex;
+    gap: 6px;
+    padding: 10px;
+    border-top: 1px solid #ccd0d4;
+}
+
+.asa-bubble-input {
+    flex: 1;
+    padding: 8px 12px;
+    border: 1px solid #ccd0d4;
+    border-radius: 6px;
+    font-size: 13px;
+}
+
+.asa-bubble-send {
+    padding: 8px 14px;
+    background: #2271b1;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+}
+
+/* Model-tier toggle */
+.asa-tier-select {
+    border: 1px solid #ccd0d4;
+    border-radius: 6px;
+    background: #fff;
+    font-size: 13px;
+    padding: 0 6px;
+    cursor: pointer;
+    align-self: center;
+}
