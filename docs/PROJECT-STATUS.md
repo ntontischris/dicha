@@ -35,6 +35,8 @@ Supabase project fxocmwpvpqeaucxoekgo (PostgreSQL 17.6 + pgvector)
 | WP Plugin | Παραδίδεται ως zip (`dicha-sync-v3`, v2.5.5) | Δεν είναι στο repo του backend. Ρύθμιση από WP-admin: Endpoint URL, Webhook Secret, Project ID |
 | Δημόσιο URL | `https://woo.89-167-0-26.sslip.io` | sslip.io wildcard DNS → IP. Προσωρινό αλλά πλήρως λειτουργικό· για δικό σας domain: `bash setup-web.sh your.domain.com` |
 
+⚠️ Το URL είναι **API, όχι website**: η ρίζα `/` επιστρέφει `{"detail":"Not Found"}` — φυσιολογικό. Χρήσιμες σελίδες: **`/admin`** (admin dashboard) και **`/health`** (έλεγχος λειτουργίας). Το chat για τελικούς χρήστες γίνεται μέσα από το WP-admin του καταστήματος (plugin), όχι από αυτό το URL.
+
 ## 2. Τι δουλεύει (επιβεβαιωμένο 2026-06-10)
 
 - **End-to-end λειτουργία στη νέα υποδομή:** `/health`, `/chat`, `/api/logs`, chat μέσα από το WP-admin.
@@ -68,21 +70,15 @@ docker run -d --name woo-agent --restart unless-stopped \
 2. **Κοινός server.** Στο `89.167.0.26` τρέχουν και άλλες live εφαρμογές πίσω από το ίδιο nginx. Μην αγγίζετε άλλα vhosts/containers. Νέο vhost ΜΟΝΟ μέσω `setup-web.sh` (έχει guards: ελέγχει DNS, αρνείται υπάρχον vhost, `nginx -t` πριν reload).
 3. **Plugin endpoint:** πρέπει να τελειώνει σε `/webhook` και να είναι HTTPS με έγκυρο certificate (το WP κάνει sslverify).
 
-## 5. Γνωστά θέματα / αδυναμίες
 
-- **3 κενά στον οδηγό Woodmart** (65 ενότητες): δεν καλύπτουν λογότυπο, sticky header, announcement bar → ο agent απαντά «μέτρια» σε αυτά. Διόρθωση: 3× `POST /docs` με scope `_global` όταν γραφτούν οι ενότητες.
-- **sslip.io URL:** δεμένο με την IP του server. Αλλαγή server = αλλάζει το URL = επαναρύθμιση endpoint σε όλα τα shops. Με δικό σας domain αυτό λύνεται οριστικά.
-- **Cohere reranking:** αν λείψει/λήξει το COHERE_API_KEY, ο agent συνεχίζει χωρίς rerank **χωρίς προειδοποίηση** (ελαφρώς χειρότερη ποιότητα ανάκτησης).
-- **Μάθημα από το migration:** αντιγραφή δεδομένων με `json_populate_recordset ... overriding system value` ΔΕΝ προχωράει τα identity sequences → duplicate-key (409) στα inserts. Μετά από κάθε τέτοιο copy: `setval(pg_get_serial_sequence(...), max(id))` σε όλους τους πίνακες. (Έγινε ήδη στη νέα βάση — ισχύει για μελλοντικά αντίγραφα.)
 
 ## 6. Εκκρεμότητες
 
 | # | Τι | Ποιος |
 |---|---|---|
 | 1 | Δικό σας domain αντί για sslip.io: `bash setup-web.sh your.domain.com` (ως root) + επαναρύθμιση endpoint στα shops | Dev πελάτη |
-| 2 | Εγκατάσταση plugin v2.5.5 + sync σε κάθε κατάστημα (Endpoint, Webhook Secret, μοναδικό Project ID ανά shop) | Πελάτης |
-| 3 | Συμπλήρωση 3 κενών Woodmart οδηγού (logo / sticky header / announcement bar) μέσω `POST /docs` | Συντηρητής περιεχομένου |
-| 4 | Καθαρισμός προσωρινών secrets/εργαλείων migration από τον server (`~/dbcopy/`) και τοπικά αρχεία μετάβασης· αλλαγή root password | ntontis |
+| 2 | Εγκατάσταση plugin v2.5.5 + sync σε κάθε κατάστημα (Endpoint, Webhook Secret, μοναδικό Project ID ανά shop) | Πελάτης 
+
 
 ## 7. Πού να ψάξετε τι
 
@@ -94,3 +90,4 @@ docker run -d --name woo-agent --restart unless-stopped \
 | Δω/αλλάξω το schema της βάσης | `schema_full.sql` (⚠️ drop+recreate — μόνο σε άδεια βάση) |
 | Αλλάξω μοντέλα AI (π.χ. αναβάθμιση tier) | env vars στο `.env` του server, μετά rm+run container |
 | Δω το ιστορικό συνομιλιών | `GET /api/logs` ή καρτέλα «Ιστορικό» στο WP-admin |
+| Μπω στο admin dashboard του backend | `https://woo.89-167-0-26.sslip.io/admin` |
